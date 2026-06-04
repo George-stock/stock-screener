@@ -2,9 +2,8 @@ name: Daily Stock Screener Update
 
 on:
   schedule:
-    # 毎日 UTC 21:00 = 日本時間 06:00（NYクローズの翌朝）
     - cron: "0 21 * * 1-5"
-  workflow_dispatch:  # 手動実行ボタン
+  workflow_dispatch:
 
 jobs:
   generate:
@@ -23,15 +22,15 @@ jobs:
 
       - name: ライブラリをインストール
         run: |
-          pip install finvizfinance yfinance pandas numpy requests
+          pip install yfinance pandas numpy requests beautifulsoup4
 
       - name: データ生成スクリプトを実行
-        run: python scripts/generate.py
+        run: python stock-screener/scripts/generate.py
 
       - name: 生成されたJSONをコミット
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/data.json docs/universe.json
+          git add stock-screener/docs/data.json stock-screener/docs/universe.json
           git diff --staged --quiet || git commit -m "📊 Daily update: $(date -u '+%Y-%m-%d')"
           git push
