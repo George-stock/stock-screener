@@ -4,12 +4,13 @@ US Stock Screener - データ生成スクリプト
 data.json と universe.json を生成する。
 
 データソース:
-  - 銘柄リスト: scripts/tickers.csv（リポジトリに保存済み）
+  - 銘柄リスト: scripts/tickers.csv
+  - Industry/Sector: Finviz無料スクリーナー
   - 価格データ: yfinance（無料）
   - EPS加速: yfinance 四半期決算データ
 """
 
-import json, os, sys, time, datetime, warnings, csv
+import json, sys, time, datetime, warnings, csv, requests
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -29,10 +30,98 @@ try:
     import pandas as pd
     import numpy as np
     import yfinance as yf
+    from bs4 import BeautifulSoup
     print("✅ ライブラリ読み込み完了")
 except ImportError as e:
     print(f"❌ ライブラリ不足: {e}")
+    print("pip install yfinance pandas numpy requests beautifulsoup4")
     sys.exit(1)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Finviz から Industry/Sector 取得
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def fetch_finviz_industry() -> dict:
+    """Finviz無料スクリーナーから全銘柄のIndustry/Sectorを取得。"""
+    print("Finviz から Industry/Sector 取得中...")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    result = {}  # {ticker: {sector, industry}}
+    
+    # Finviz screener は1ページ20件、offsetで全件取得
+    offset = 1
+    while True:
+        url = f"https://finviz.com/screener.ashx?v=152&o=ticker&r={offset}"
+        try:
+            r = requests.get(url, headers=headers, timeout=30)
+            if r.status_code != 200:
+                print(f"  Finviz アクセス失敗: {r.status_code}")
+                break
+            
+            soup = BeautifulSoup(r.text, "html.parser")
+            
+            # テーブルを探す
+            table = soup.find("table", {"id": "screener-views-table"})
+            if not table:
+                # 別のテーブル構造を試す
+                tables = soup.find_all("table", class_="styled-table-new")
+                table = tables[0] if tables else None
+            
+            if not table:
+                print(f"  テーブル見つからず (offset={offset})")
+                break
+                
+            rows = table.find_all("tr")[1:]  # ヘッダー除く
+            if not rows:
+                break
+                
+            count = 0
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) < 4:
+                    continue
+                try:
+                    ticker   = cols[1].get_text(strip=True)
+                    sector   = cols[3].get_text(strip=True)
+                    industry = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                    if ticker:
+                        result[ticker] = {"sector": sector, "industry": industry}
+                        count += 1
+                except Exception:
+                    pass
+            
+            print(f"  offset={offset}: {count}件取得 (累計: {len(result)}件)")
+            
+            if count == 0:
+                break
+                
+            offset += 20
+            time.sleep(1)  # レート制限回避
+            
+        except Exception as e:
+            print(f"  Finviz エラー: {e}")
+            break
+    
+    print(f"  → Finviz から {len(result)} 銘柄のIndustry取得完了")
+    return result
+
+
+def fetch_industry_yfinance(tickers: list[str]) -> dict:
+    """yfinanceからIndustry/Sectorを取得（Finvizの補完用）。"""
+    result = {}
+    print(f"  yfinance でIndustry補完中（{len(tickers)}銘柄）...")
+    for ticker in tickers[:500]:  # 上位500銘柄まで
+        try:
+            info = yf.Ticker(ticker).info
+            result[ticker] = {
+                "sector":   info.get("sector", ""),
+                "industry": info.get("industry", ""),
+            }
+        except Exception:
+            pass
+        time.sleep(0.05)
+    return result
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -86,7 +175,7 @@ def industry_rs_grade(rank: int, total: int) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 価格データ一括取得 + RS計算
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
+def fetch_prices_and_calc_rs(ticker_info: list[dict], industry_map: dict) -> pd.DataFrame:
     all_tickers = [t["symbol"] for t in ticker_info]
     info_map    = {t["symbol"]: t for t in ticker_info}
     batch_size  = 500
@@ -104,7 +193,6 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
                               progress=False, threads=True, group_by="ticker")
             if raw.empty:
                 continue
-            # マルチインデックスの場合
             if isinstance(raw.columns, pd.MultiIndex):
                 close = raw.xs("Close", axis=1, level=1)
             else:
@@ -120,20 +208,17 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
 
     print(f"  → {len(closes_all)} 銘柄の価格取得完了")
 
-    # RS計算
     print("RS Rating 計算中...")
-    rs_raws      = {t: calc_rs_raw(p) for t, p in closes_all.items()}
-    rs_series    = pd.Series(rs_raws)
-    rs_ratings   = rs_raw_to_rating(rs_series)
+    rs_raws    = {t: calc_rs_raw(p) for t, p in closes_all.items()}
+    rs_series  = pd.Series(rs_raws)
+    rs_ratings = rs_raw_to_rating(rs_series)
 
     today_prices = {t: float(p.iloc[-1]) for t, p in closes_all.items() if len(p) >= 2}
     prev_prices  = {t: float(p.iloc[-2]) for t, p in closes_all.items() if len(p) >= 2}
 
-    # 出来高データ取得
     print("出来高データ取得中...")
     volumes     = {}
     avg_volumes = {}
-
     for i in range(0, len(all_tickers), batch_size):
         batch = all_tickers[i:i+batch_size]
         try:
@@ -155,22 +240,24 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
             pass
         time.sleep(2)
 
-    # DataFrame構築
     rows = []
     for ticker in closes_all:
         rs    = rs_ratings.get(ticker)
         price = today_prices.get(ticker)
         prev  = prev_prices.get(ticker)
         info  = info_map.get(ticker, {})
+        ind   = industry_map.get(ticker, {})
         if rs is None or pd.isna(rs) or price is None:
             continue
-        avg_v = avg_volumes.get(ticker, 0)
-        vol   = volumes.get(ticker, 0)
+        avg_v   = avg_volumes.get(ticker, 0)
+        vol     = volumes.get(ticker, 0)
+        sector   = ind.get("sector")   or info.get("sector", "")
+        industry = ind.get("industry") or info.get("industry", "")
         rows.append({
             "Ticker":      ticker,
             "Company":     info.get("name", ""),
-            "Sector":      info.get("sector", ""),
-            "Industry":    info.get("industry", ""),
+            "Sector":      sector,
+            "Industry":    industry,
             "Country":     info.get("country", "USA"),
             "Price":       round(price, 2),
             "Change":      f"{(price-prev)/prev*100:.2f}%" if prev else "—",
@@ -187,10 +274,9 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Industry RS計算
     if "Industry" in df.columns:
         ind_rs_map = (
-            df[df["Industry"] != ""].groupby("Industry")["RS Rating"]
+            df[df["Industry"].fillna("") != ""].groupby("Industry")["RS Rating"]
             .mean().rank(ascending=False).astype(int)
         )
         df["Industry RS"] = df["Industry"].map(ind_rs_map)
@@ -238,7 +324,7 @@ def calc_eps_accel(tickers: list[str]) -> dict:
             yoy0 = (q0 - q1) / abs(q1) * 100 if q1 != 0 else (100.0 if q0 > q1 else 0)
             yoy1 = 0
             if len(eps) >= 4:
-                q2, q3 = float(eps.iloc[2]), float(eps.iloc[3])
+                q2 = float(eps.iloc[2])
                 yoy1 = (q1 - q2) / abs(q2) * 100 if q2 != 0 else 0
             result[ticker] = {
                 "eps_accel": "Y" if yoy0 > yoy1 else "N",
@@ -297,13 +383,12 @@ def build_hvc(tickers: list[str]) -> dict:
                               progress=False, threads=True, group_by="ticker")
             if raw.empty:
                 continue
-            if isinstance(raw.columns, pd.MultiIndex):
-                vol_df   = raw.xs("Volume", axis=1, level=1)
-                close_df = raw.xs("Close",  axis=1, level=1)
-                open_df  = raw.xs("Open",   axis=1, level=1)
-                high_df  = raw.xs("High",   axis=1, level=1)
-            else:
+            if not isinstance(raw.columns, pd.MultiIndex):
                 continue
+            vol_df   = raw.xs("Volume", axis=1, level=1)
+            close_df = raw.xs("Close",  axis=1, level=1)
+            open_df  = raw.xs("Open",   axis=1, level=1)
+            high_df  = raw.xs("High",   axis=1, level=1)
 
             for ticker in batch:
                 if ticker not in vol_df.columns:
@@ -386,9 +471,24 @@ def main():
         with open(DATA_JSON, encoding="utf-8") as f:
             existing = json.load(f)
 
+    # Industry/Sector取得
+    industry_map = fetch_finviz_industry()
+    if len(industry_map) < 100:
+        print("Finviz取得失敗 → yfinanceでフォールバック")
+        ticker_info = load_tickers()
+        syms = [t["symbol"] for t in ticker_info]
+        industry_map = fetch_industry_yfinance(syms)
+    
     ticker_info = load_tickers()
-    df_all      = fetch_prices_and_calc_rs(ticker_info)
 
+    # Industry情報をticker_infoにマージ
+    for t in ticker_info:
+        sym = t["symbol"]
+        if sym in industry_map:
+            t["sector"]   = industry_map[sym].get("sector", "")
+            t["industry"] = industry_map[sym].get("industry", "")
+
+    df_all    = fetch_prices_and_calc_rs(ticker_info, industry_map)
     if df_all.empty:
         print("❌ データ取得失敗")
         sys.exit(1)
