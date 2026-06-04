@@ -1,104 +1,130 @@
 <!DOCTYPE html>
-<html lang="ja" class="light">
+<html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
   <title>US Stock Screener</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="topbar-left">
-      <span class="logo">📊</span>
-      <h1 class="site-title">US Stock Screener</h1>
-      <span class="by">by kiri_trader style</span>
+    <div class="topbar-main">
+      <h1 class="site-title">
+        <span class="title-emoji">📈</span>
+        <span class="title-main">US Stock Screener</span>
+        <span class="title-by">by kiri_trader</span>
+      </h1>
+      <div class="meta">
+        <label class="date-picker">
+          日付
+          <select id="day-select"></select>
+        </label>
+      </div>
     </div>
-    <div class="topbar-right">
-      <label id="date-label">日付</label>
-      <select id="date-select"></select>
-    </div>
+    <p id="screening-summary" class="summary"></p>
+    <p id="generated-at" class="generated"></p>
   </header>
 
   <main>
-    <p id="screening-summary" class="summary"></p>
-    <p id="generated-at" class="generated-at"></p>
+    <section id="insights" class="cards" aria-label="示唆"></section>
 
-    <!-- タブ -->
-    <nav class="tabs">
-      <button class="tab active" data-tab="screener">抽出リスト</button>
-      <button class="tab" data-tab="industry">Industry RS</button>
-      <button class="tab" data-tab="hvc">HVC</button>
-      <button class="tab" data-tab="mylist">マイリスト</button>
-    </nav>
-
-    <!-- 抽出リスト -->
-    <section id="tab-screener" class="tab-panel active">
-      <div class="summary-cards" id="summary-cards"></div>
-      <div class="table-toolbar">
-        <span class="table-title" id="table-title">抽出リスト</span>
-        <input type="text" id="filter-input" placeholder="ティッカー/銘柄/Industryで絞" />
-        <label>RS≥ <input type="number" id="rs-min" value="0" min="0" max="99" style="width:50px"></label>
-        <button id="col-toggle-btn">列</button>
-        <button id="tv-copy-btn">TVリストをコピー</button>
-        <a id="finviz-maps" href="#" target="_blank" style="color:var(--accent)">finviz Maps</a>
-      </div>
-      <div id="col-selector" class="col-selector hidden"></div>
-      <div class="table-wrap">
-        <table id="screener-table">
-          <thead><tr id="screener-head"></tr></thead>
-          <tbody id="screener-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Industry RS -->
-    <section id="tab-industry" class="tab-panel">
-      <div class="table-toolbar">
-        <span class="table-title">Industry RS トレンド</span>
-        <input type="text" id="industry-filter" placeholder="Industryで絞り込み" />
-      </div>
-      <div class="table-wrap">
-        <table id="industry-table">
-          <thead><tr id="industry-head"></tr></thead>
-          <tbody id="industry-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- HVC -->
-    <section id="tab-hvc" class="tab-panel">
-      <div class="table-toolbar">
-        <span class="table-title" id="hvc-title">HVC（直近3ヶ月に年間最大出来高）</span>
-      </div>
-      <div class="table-wrap">
-        <table id="hvc-table">
-          <thead><tr id="hvc-head"></tr></thead>
-          <tbody id="hvc-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- マイリスト -->
-    <section id="tab-mylist" class="tab-panel">
-      <div class="mylist-container">
-        <div class="mylist-left">
-          <p>ティッカーを貼り付け（改行/カンマ/スペース区切り）</p>
-          <textarea id="mylist-input" rows="12" placeholder="AAPL&#10;MSFT&#10;NVDA"></textarea>
-          <button id="mylist-run">変換</button>
-          <p id="mylist-status" class="mylist-status"></p>
-          <div id="mylist-unmatched" hidden></div>
-        </div>
-        <div class="mylist-right">
-          <button id="mylist-copy" disabled>TVリストをコピー</button>
-          <textarea id="mylist-output" rows="16" readonly></textarea>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>抽出リスト<span class="head-note" id="screen-meta"></span></h2>
+        <div class="controls">
+          <input id="filter" type="search" placeholder="ティッカー/銘柄/Industryで絞り込み" autocomplete="off">
+          <label class="rs-min">RS≥ <input id="rs-min" type="number" min="0" max="99" step="1" placeholder="0"></label>
+          <details class="col-menu">
+            <summary>列</summary>
+            <div id="col-checkboxes" class="col-checkboxes"></div>
+          </details>
+          <button id="copy-tv" type="button" title="TradingViewウォッチリスト取込用テキストをコピー">TVリストをコピー</button>
+          <a id="finviz-maps" class="btn-link" href="#" target="_blank" rel="noopener">finviz Maps</a>
         </div>
       </div>
-      <div id="mylist-industry-rs"></div>
+      <div class="table-wrap">
+        <table id="screen-table">
+          <thead><tr id="screen-head"></tr></thead>
+          <tbody id="screen-body"></tbody>
+        </table>
+      </div>
+      <p id="table-empty" class="empty" hidden>該当なし</p>
+    </section>
+
+    <section class="panel" id="mylist-panel">
+      <div class="panel-head">
+        <h2>マイリスト → TVリスト<span class="head-note">自作のティッカーを貼り付け、Industry RSグレード別にブロック分け＋銘柄RS降順でTradingView取込形式に変換</span></h2>
+      </div>
+      <div class="mylist-body">
+        <div class="mylist-io">
+          <label class="mylist-field">
+            <span class="mylist-label">入力（改行 / カンマ / スペース区切り。<code>NASDAQ:</code> 等の接頭辞は自動除去）</span>
+            <textarea id="mylist-input" rows="8" placeholder="AAPL, MSFT&#10;NVDA&#10;NASDAQ:AMD" autocomplete="off" spellcheck="false"></textarea>
+          </label>
+          <label class="mylist-field">
+            <span class="mylist-label">出力（TradingView ウォッチリスト取込用テキスト）</span>
+            <textarea id="mylist-output" rows="8" readonly placeholder="ここに変換結果が表示されます" spellcheck="false"></textarea>
+          </label>
+        </div>
+        <div class="mylist-controls">
+          <button id="mylist-run" type="button">変換</button>
+          <button id="mylist-copy" type="button" disabled>TVリストをコピー</button>
+          <span id="mylist-status" class="mylist-status"></span>
+        </div>
+        <p id="mylist-unmatched" class="mylist-unmatched" hidden></p>
+      </div>
+    </section>
+
+    <section class="panel" id="trend-panel">
+      <div class="panel-head">
+        <h2>Industry RS<span class="head-note">（ランキング・全期間の推移）</span></h2>
+        <div class="controls">
+          <input id="trend-filter" type="search" placeholder="Industry/Sectorで絞り込み" autocomplete="off">
+          <label class="rs-min">単位 <select id="trend-gran">
+            <option value="day">日次</option>
+            <option value="week" selected>週次</option>
+          </select></label>
+          <label class="rs-min">表示 <select id="trend-mode">
+            <option value="rs">RS値</option>
+            <option value="rank" selected>順位</option>
+          </select></label>
+          <label class="rs-min">件数 <select id="trend-limit">
+            <option value="30">上位30</option>
+            <option value="50">上位50</option>
+            <option value="0" selected>全部</option>
+          </select></label>
+        </div>
+      </div>
+      <div id="trend-movers" class="movers"></div>
+      <div class="table-wrap heatmap-wrap">
+        <table id="heatmap" class="heatmap">
+          <thead id="heatmap-head"></thead>
+          <tbody id="heatmap-body"></tbody>
+        </table>
+      </div>
+      <p id="trend-empty" class="empty" hidden>Industry RSの時系列データが足りません（2日以上必要）。</p>
+    </section>
+
+    <section class="panel" id="hv-panel" hidden>
+      <div class="panel-head">
+        <h2>HVC銘柄 <span class="head-note">HVE / HV1（ギャップ≥10%・高値引け≥75% / 発生日終値から-10%超で除外）<span id="hv-meta"></span></span></h2>
+        <div class="controls">
+          <input id="hv-filter" type="search" placeholder="ティッカー/Industryで絞り込み" autocomplete="off">
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="hv-table">
+          <thead id="hv-head"></thead>
+          <tbody id="hv-body"></tbody>
+        </table>
+      </div>
+      <p id="hv-empty" class="empty" hidden>該当なし</p>
     </section>
   </main>
 
   <footer class="footer">
-    <span id="footer-info"></span>
+    <span>RS Rating / Industry RS は IBD近似（finviz_screener 算出）。市場データの正確性は保証されません。</span>
   </footer>
 
   <script src="app.js"></script>
