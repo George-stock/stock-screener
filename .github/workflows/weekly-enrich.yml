@@ -24,7 +24,7 @@ jobs:
         run: pip install yfinance pandas requests
 
       - name: Industry情報を取得
-        run: python stock-screener/scripts/enrich_tickers.py
+        run: python stock-screener/stock-screener/scripts/enrich_tickers.py
 
       - name: 更新されたCSVをコミット
         run: |
