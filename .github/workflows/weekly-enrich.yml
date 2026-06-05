@@ -2,7 +2,7 @@ name: Weekly Industry Enrichment
 
 on:
   schedule:
-    - cron: "0 18 * * 0"
+    - cron: "0 18 * * 0"  # 毎週日曜 UTC18:00 = ドイツ夏時間20:00
   workflow_dispatch:
 
 jobs:
@@ -30,9 +30,11 @@ jobs:
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git stash
           git pull --rebase
-          git stash pop
           git add stock-screener/scripts/tickers_enriched.csv stock-screener/scripts/industry_cache.json
-          git diff --staged --quiet || git commit -m "🏭 Weekly industry enrichment: $(date -u '+%Y-%m-%d')"
-          git push
+          if git diff --staged --quiet; then
+            echo "変更なし。コミットをスキップします。"
+          else
+            git commit -m "🏭 Weekly industry enrichment: $(date -u '+%Y-%m-%d')"
+            git push
+          fi
