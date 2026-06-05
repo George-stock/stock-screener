@@ -1,6 +1,6 @@
 """
 US Stock Screener - データ生成スクリプト
-kiri_traderのデータを最大限活用してRS Ratingを計算。
+本家kiri_traderに近いカラム構成で生成。
 """
 
 import json, sys, time, datetime, warnings, csv
@@ -37,11 +37,36 @@ def time_ok() -> bool:
     return elapsed() < MAX_SECONDS
 
 
+def fmt_pct(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    return f"{v*100:.2f}%"
+
+def fmt_num(v, decimals=2):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    return round(float(v), decimals)
+
+def fmt_market_cap(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    if v >= 1e12: return f"{v/1e12:.2f}T"
+    if v >= 1e9:  return f"{v/1e9:.2f}B"
+    if v >= 1e6:  return f"{v/1e6:.2f}M"
+    return str(int(v))
+
+def fmt_vol(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    if v >= 1e6: return f"{v/1e6:.2f}M"
+    if v >= 1e3: return f"{v/1e3:.0f}K"
+    return str(int(v))
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 既存data.jsonからIndustry情報を抽出（キャッシュとして活用）
+# 既存data.jsonからIndustryキャッシュ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def load_industry_cache() -> dict:
-    """既存data.jsonの全日付データからticker→{sector,industry,name,country}を抽出。"""
     cache = {}
     if not DATA_JSON.exists():
         return cache
@@ -57,46 +82,31 @@ def load_industry_cache() -> dict:
                     continue
                 industry = row[idx["Industry"]] if "Industry" in idx else ""
                 sector   = row[idx["Sector"]]   if "Sector"   in idx else ""
-                company  = row[idx["Company"]]  if "Company"  in idx else ""
-                country  = row[idx["Country"]]  if "Country"  in idx else "USA"
                 if industry and t not in cache:
-                    cache[t] = {
-                        "industry": industry or "",
-                        "sector":   sector   or "",
-                        "name":     company  or "",
-                        "country":  country  or "USA",
-                    }
-        print(f"data.jsonキャッシュ: {len(cache)} 銘柄のIndustry情報")
+                    cache[t] = {"industry": industry or "", "sector": sector or ""}
+        print(f"data.jsonキャッシュ: {len(cache)} 銘柄")
     except Exception as e:
-        print(f"  data.jsonキャッシュ読み込みエラー: {e}")
+        print(f"  キャッシュ読み込みエラー: {e}")
     return cache
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 銘柄リスト読み込み（Industry情報付き）
+# 銘柄リスト読み込み
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def load_tickers(industry_cache: dict) -> list[dict]:
     csv_path = TICKERS_CSV if TICKERS_CSV.exists() else TICKERS_CSV_B
-    if not csv_path.exists():
-        print(f"❌ tickers.csv が見つかりません")
-        sys.exit(1)
     tickers = []
     with open(csv_path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             sym = row["symbol"].strip()
             if not sym:
                 continue
-            # キャッシュにあればIndustry情報を補完
             if not row.get("industry") and sym in industry_cache:
-                cache = industry_cache[sym]
-                row["industry"] = cache.get("industry", "")
-                row["sector"]   = cache.get("sector",   "")
-                if not row.get("name"):
-                    row["name"] = cache.get("name", "")
+                row["industry"] = industry_cache[sym].get("industry", "")
+                row["sector"]   = industry_cache[sym].get("sector", "")
             tickers.append(row)
-
-    has_industry = sum(1 for t in tickers if t.get("industry", ""))
-    print(f"銘柄リスト: {len(tickers)} 銘柄 (Industry付き: {has_industry}銘柄)")
+    has_ind = sum(1 for t in tickers if t.get("industry", ""))
+    print(f"銘柄リスト: {len(tickers)} 銘柄 (Industry付き: {has_ind})")
     return tickers
 
 
@@ -116,11 +126,9 @@ def calc_rs_raw(prices: pd.Series) -> float:
     except Exception:
         return float("nan")
 
-
 def rs_raw_to_rating(series: pd.Series) -> pd.Series:
     rank = series.rank(pct=True, na_option="keep")
     return (rank * 98 + 1).clip(1, 99).round().astype("Int64")
-
 
 def industry_rs_grade(rank: int, total: int) -> str:
     pct = rank / total
@@ -141,15 +149,17 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
 
     print(f"価格データ取得中（{len(all_tickers)}銘柄）...")
     closes_all = {}
+    highs_all  = {}
+    lows_all   = {}
 
     for i in range(0, len(all_tickers), batch_size):
         if not time_ok():
-            print(f"  ⚠️ タイムアウト接近、打ち切り")
+            print(f"  ⚠️ タイムアウト接近")
             break
         batch = all_tickers[i:i+batch_size]
         n = i // batch_size + 1
-        total_b = (len(all_tickers) - 1) // batch_size + 1
-        print(f"  バッチ {n}/{total_b} ({len(batch)}銘柄)... [{elapsed():.0f}s]")
+        tb = (len(all_tickers) - 1) // batch_size + 1
+        print(f"  バッチ {n}/{tb} ({len(batch)}銘柄)... [{elapsed():.0f}s]")
         try:
             raw = yf.download(batch, period="14mo", auto_adjust=True,
                               progress=False, threads=True, group_by="ticker")
@@ -157,15 +167,23 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
                 continue
             if isinstance(raw.columns, pd.MultiIndex):
                 close = raw.xs("Close", axis=1, level=1)
+                high  = raw.xs("High",  axis=1, level=1)
+                low   = raw.xs("Low",   axis=1, level=1)
             else:
                 close = raw[["Close"]] if "Close" in raw else pd.DataFrame()
+                high  = raw[["High"]]  if "High"  in raw else pd.DataFrame()
+                low   = raw[["Low"]]   if "Low"   in raw else pd.DataFrame()
             for t in batch:
                 if t in close.columns:
                     s = close[t].dropna()
                     if len(s) >= 10:
                         closes_all[t] = s
+                        if t in high.columns:
+                            highs_all[t] = high[t].dropna()
+                        if t in low.columns:
+                            lows_all[t]  = low[t].dropna()
         except Exception as e:
-            print(f"    バッチエラー: {e}")
+            print(f"    エラー: {e}")
         time.sleep(2)
 
     print(f"  → {len(closes_all)} 銘柄取得完了 [{elapsed():.0f}s]")
@@ -178,8 +196,36 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
     today_prices = {t: float(p.iloc[-1]) for t, p in closes_all.items() if len(p) >= 2}
     prev_prices  = {t: float(p.iloc[-2]) for t, p in closes_all.items() if len(p) >= 2}
 
+    # 52週高値・安値・SMA計算
+    w52_high = {}
+    w52_low  = {}
+    sma20    = {}
+    sma50    = {}
+
+    for t, prices in closes_all.items():
+        if len(prices) >= 252:
+            w52_high[t] = float(prices.iloc[-252:].max())
+            w52_low[t]  = float(prices.iloc[-252:].min())
+        elif len(prices) >= 1:
+            w52_high[t] = float(prices.max())
+            w52_low[t]  = float(prices.min())
+        if len(prices) >= 20:
+            sma20[t] = float(prices.iloc[-20:].mean())
+        if len(prices) >= 50:
+            sma50[t] = float(prices.iloc[-50:].mean())
+
+    # パフォーマンス計算
+    perf_month = {}
+    perf_quart = {}
+    for t, prices in closes_all.items():
+        cur = float(prices.iloc[-1])
+        if len(prices) >= 21:
+            perf_month[t] = (cur - float(prices.iloc[-21])) / float(prices.iloc[-21])
+        if len(prices) >= 63:
+            perf_quart[t] = (cur - float(prices.iloc[-63])) / float(prices.iloc[-63])
+
     print("出来高データ取得中...")
-    volumes = {}
+    volumes     = {}
     avg_volumes = {}
     for i in range(0, len(all_tickers), batch_size):
         if not time_ok():
@@ -212,8 +258,16 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
         info  = info_map.get(ticker, {})
         if rs is None or pd.isna(rs) or price is None:
             continue
-        avg_v    = avg_volumes.get(ticker, 0)
-        vol      = volumes.get(ticker, 0)
+        avg_v  = avg_volumes.get(ticker, 0)
+        vol    = volumes.get(ticker, 0)
+        hi52   = w52_high.get(ticker)
+        lo52   = w52_low.get(ticker)
+        s20    = sma20.get(ticker)
+        s50    = sma50.get(ticker)
+        pm     = perf_month.get(ticker)
+        pq     = perf_quart.get(ticker)
+        chg    = (price - prev) / prev if prev else 0
+
         rows.append({
             "Ticker":      ticker,
             "Company":     info.get("name", ""),
@@ -221,14 +275,24 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
             "Industry":    info.get("industry", "") or "",
             "Country":     info.get("country", "USA") or "USA",
             "Price":       round(price, 2),
-            "Change":      f"{(price-prev)/prev*100:.2f}%" if prev else "—",
+            "Change":      f"{chg*100:.2f}%",
             "RS Rating":   int(rs),
-            "Avg Volume":  f"{avg_v/1e6:.2f}M" if avg_v >= 1e6 else f"{avg_v/1e3:.0f}K" if avg_v >= 1e3 else str(int(avg_v)),
-            "Rel Volume":  round(vol / avg_v, 2) if avg_v > 0 else None,
-            "_change_pct": (price - prev) / prev if prev else 0,
+            "Avg Volume":  fmt_vol(avg_v),
+            "Rel Volume":  fmt_num(vol / avg_v if avg_v > 0 else None, 2),
+            "Market Cap":  None,  # yfinance個別取得で補完
+            "Float Short": None,
+            "Perf Month":  fmt_pct(pm),
+            "Perf Quart":  fmt_pct(pq),
+            "SMA20":       fmt_pct((price - s20) / s20 if s20 else None),
+            "SMA50":       fmt_pct((price - s50) / s50 if s50 else None),
+            "52W High":    fmt_pct((price - hi52) / hi52 if hi52 else None),
+            "52W Low":     fmt_pct((price - lo52) / lo52 if lo52 else None),
+            "Earnings":    None,
+            "_change_pct": chg,
             "_price":      price,
             "_avg_vol":    avg_v,
             "_vol":        vol,
+            "_lo52":       lo52,
         })
 
     df = pd.DataFrame(rows)
@@ -250,6 +314,71 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# スクリーニング通過銘柄の詳細情報取得
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def enrich_screened(df: pd.DataFrame, df_all: pd.DataFrame) -> pd.DataFrame:
+    """スクリーニング通過銘柄のMarket Cap・Float Short・Earnings等をyfinanceで取得。"""
+    if not time_ok():
+        return df
+
+    tickers = df["Ticker"].tolist()
+    print(f"スクリーニング銘柄の詳細取得中（{len(tickers)}銘柄）...")
+
+    for ticker in tickers:
+        if not time_ok():
+            break
+        try:
+            info = yf.Ticker(ticker).info
+            mc   = info.get("marketCap")
+            fs   = info.get("floatShares")
+            sh   = info.get("sharesShort")
+            sec  = info.get("sector", "") or ""
+            ind  = info.get("industry", "") or ""
+
+            # Market Cap
+            if mc:
+                df.loc[df["Ticker"] == ticker, "Market Cap"] = fmt_market_cap(mc)
+
+            # Float Short (%)
+            if fs and sh and fs > 0:
+                df.loc[df["Ticker"] == ticker, "Float Short"] = fmt_pct(sh / fs)
+
+            # Earnings date
+            cal = info.get("earningsTimestamp")
+            if cal:
+                import datetime as dt
+                try:
+                    ed = dt.datetime.fromtimestamp(cal).strftime("%b %d")
+                    df.loc[df["Ticker"] == ticker, "Earnings"] = ed
+                except Exception:
+                    pass
+
+            # Industry補完
+            if ind:
+                df.loc[df["Ticker"] == ticker, "Sector"]   = sec
+                df.loc[df["Ticker"] == ticker, "Industry"]  = ind
+                df_all.loc[df_all["Ticker"] == ticker, "Sector"]   = sec
+                df_all.loc[df_all["Ticker"] == ticker, "Industry"]  = ind
+                print(f"  {ticker}: {ind} | MC={fmt_market_cap(mc)}")
+
+        except Exception:
+            pass
+        time.sleep(0.3)
+
+    # Industry RS再計算
+    valid = df_all[df_all["Industry"].fillna("") != ""]
+    if len(valid) > 0:
+        ind_rs_map = (
+            valid.groupby("Industry")["RS Rating"]
+            .mean().rank(ascending=False).astype(int)
+        )
+        df["Industry RS"]     = df["Industry"].map(ind_rs_map)
+        df_all["Industry RS"] = df_all["Industry"].map(ind_rs_map)
+
+    return df
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # スクリーニングフィルタ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
@@ -258,8 +387,15 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["_price"].between(0.75, 300)]
     df = df[df["_avg_vol"] >= 500000]
     df = df[df["_price"] * df["_vol"] >= 1_000_000]
-    df = df[df["Rel Volume"].fillna(0) >= 1]
+    df = df[df["Rel Volume"].fillna(0).astype(float) >= 1]
     df = df[df["RS Rating"] >= 60]
+    # 52W安値+30%以上
+    def check_52w(row):
+        lo = row.get("_lo52")
+        if lo and lo > 0:
+            return row["_price"] >= lo * 1.30
+        return True
+    df = df[df.apply(check_52w, axis=1)]
     df = df.sort_values("RS Rating", ascending=False).reset_index(drop=True)
     df.index = df.index + 1
     df.insert(0, "No.", df.index)
@@ -295,15 +431,15 @@ def calc_eps_accel(tickers: list[str]) -> dict:
                 q2 = float(eps.iloc[2])
                 yoy1 = (q1 - q2) / abs(q2) * 100 if q2 != 0 else 0
             result[ticker] = {
-                "eps_accel": "Y" if yoy0 > yoy1 else "N",
+                "eps_accel":  "Y" if yoy0 > yoy1 else "N",
                 "eps_yoy_q0": round(yoy0, 1),
                 "eps_yoy_q1": round(yoy1, 1),
-                "rev_accel": "", "rev_yoy_q0": None, "rev_yoy_q1": None,
+                "rev_accel":  "", "rev_yoy_q0": None, "rev_yoy_q1": None,
             }
         except Exception:
             pass
         time.sleep(0.05)
-    print(f"  → {len(result)} 銘柄のEPS判定完了")
+    print(f"  → {len(result)} 銘柄完了")
     return result
 
 
@@ -433,12 +569,7 @@ def df_to_day(df: pd.DataFrame, today: str) -> dict:
             else:
                 r.append(val)
         rows.append(r)
-    return {
-        "date":    today,
-        "count":   len(rows),
-        "columns": columns,
-        "rows":    rows,
-    }
+    return {"date": today, "count": len(rows), "columns": columns, "rows": rows}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -450,57 +581,30 @@ def main():
     print(f"=== 生成開始: {now} ===")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 既存data.jsonからIndustryキャッシュを読み込み
     industry_cache = load_industry_cache()
 
-    # 既存データ読み込み
     existing = {"days": [], "industry_trend": [], "high_volume": {}, "earnings_accel": {}}
     if DATA_JSON.exists():
         with open(DATA_JSON, encoding="utf-8") as f:
             existing = json.load(f)
 
-    # 銘柄リスト読み込み（キャッシュでIndustry補完）
     ticker_info  = load_tickers(industry_cache)
     industry_map = {t["symbol"]: t.get("industry", "") for t in ticker_info}
 
-    # 価格取得・RS計算
     df_all    = fetch_prices_and_calc_rs(ticker_info)
     if df_all.empty:
         print("❌ データ取得失敗")
         sys.exit(1)
 
-# スクリーニング
     df_screen = apply_filters(df_all)
     print(f"スクリーニング通過: {len(df_screen)} 銘柄 [{elapsed():.0f}s]")
 
-    # Industry情報が欠けている銘柄をyfinanceで補完
-    missing_ind = df_screen[df_screen["Industry"].fillna("") == ""]["Ticker"].tolist()
-    if missing_ind:
-        print(f"Industry補完中（{len(missing_ind)}銘柄）...")
-        for ticker in missing_ind:
-            try:
-                info = yf.Ticker(ticker).info
-                sec = info.get("sector", "") or ""
-                ind = info.get("industry", "") or ""
-                if ind:
-                    df_screen.loc[df_screen["Ticker"] == ticker, "Sector"]  = sec
-                    df_screen.loc[df_screen["Ticker"] == ticker, "Industry"] = ind
-                    df_all.loc[df_all["Ticker"] == ticker, "Sector"]         = sec
-                    df_all.loc[df_all["Ticker"] == ticker, "Industry"]       = ind
-                    print(f"  {ticker}: {ind}")
-            except Exception:
-                pass
-            time.sleep(0.2)
-        # Industry RS再計算
-        valid = df_all[df_all["Industry"].fillna("") != ""]
-        if len(valid) > 0:
-            ind_rs_map = valid.groupby("Industry")["RS Rating"].mean().rank(ascending=False).astype(int)
-            df_screen["Industry RS"] = df_screen["Industry"].map(ind_rs_map)
-            df_all["Industry RS"]    = df_all["Industry"].map(ind_rs_map)
+    # スクリーニング通過銘柄の詳細情報取得（Market Cap・Float Short・Earnings・Industry補完）
+    df_screen = enrich_screened(df_screen, df_all)
 
     tickers_screen = df_screen["Ticker"].tolist()
+    industry_map   = {t["symbol"]: t.get("industry", "") for t in ticker_info}
 
-    # EPS加速
     eps_map = calc_eps_accel(tickers_screen)
     df_screen["EPS加速"]  = df_screen["Ticker"].map(
         lambda t: "▲加速" if eps_map.get(t, {}).get("eps_accel") == "Y" else "—"
@@ -508,24 +612,20 @@ def main():
     df_screen["売上加速"] = "—"
     df_screen["HV"]       = ""
 
-    # Industry RS・HVC
     ind_rs_today = build_industry_rs(df_all, today)
     hvc_data     = build_hvc(tickers_screen, industry_map)
     hvc_set      = {r["ticker"] for r in hvc_data["rows"]}
     df_screen["HV"] = df_screen["Ticker"].map(lambda t: "HV1" if t in hvc_set else "")
 
-    # days更新
     days = [d for d in existing.get("days", []) if d["date"] != today]
     days.insert(0, df_to_day(df_screen, today))
     days = days[:KEEP_DAYS]
 
-    # industry_trend更新（既存の歴史データを保持）
     trends = [t for t in existing.get("industry_trend", []) if t["date"] != today]
     if ind_rs_today.get("industry_rs"):
         trends.insert(0, ind_rs_today)
     trends = trends[:TREND_DAYS]
 
-    # universe作成
     universe_tickers = {}
     for _, row in df_all.iterrows():
         t   = row.get("Ticker")
@@ -537,7 +637,6 @@ def main():
                 int(irs) if pd.notna(irs) else None,
             ]
 
-    # data.json書き出し
     data_out = {
         "generated_at":      now,
         "screening_summary": SCREENING_SUMMARY,
@@ -545,12 +644,9 @@ def main():
         "industry_trend":    trends,
         "high_volume":       hvc_data,
         "earnings_accel": {
-            "meta": {
-                "generated_at": now, "days": 60,
-                "n_targets": len(tickers_screen),
-                "n_eps_judged": len(eps_map),
-                "n_rev_judged": 0, "n_rev_ready": 0,
-            },
+            "meta": {"generated_at": now, "days": 60,
+                     "n_targets": len(tickers_screen), "n_eps_judged": len(eps_map),
+                     "n_rev_judged": 0, "n_rev_ready": 0},
             "map": eps_map,
         },
     }
@@ -562,7 +658,7 @@ def main():
         json.dump({"date": today, "generated_at": now, "tickers": universe_tickers},
                   f, ensure_ascii=False, separators=(",", ":"))
     print(f"✅ universe.json 書き出し完了")
-    print(f"=== 完了: {len(df_screen)}銘柄 / {len(universe_tickers)}銘柄RS / Industry付き: {sum(1 for _,r in df_all.iterrows() if r.get('Industry'))} [{elapsed():.0f}s] ===")
+    print(f"=== 完了: {len(df_screen)}銘柄 / {len(universe_tickers)}銘柄RS [{elapsed():.0f}s] ===")
 
 
 if __name__ == "__main__":
