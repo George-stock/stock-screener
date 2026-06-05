@@ -469,36 +469,36 @@ def main():
         print("❌ データ取得失敗")
         sys.exit(1)
 
-    # スクリーニング
+# スクリーニング
     df_screen = apply_filters(df_all)
-print(f"スクリーニング通過: {len(df_screen)} 銘柄 [{elapsed():.0f}s]")
+    print(f"スクリーニング通過: {len(df_screen)} 銘柄 [{elapsed():.0f}s]")
 
-# Industry情報が欠けている銘柄をyfinanceで補完
-missing_ind = df_screen[df_screen["Industry"].fillna("") == ""]["Ticker"].tolist()
-if missing_ind:
-    print(f"Industry補完中（{len(missing_ind)}銘柄）...")
-    for ticker in missing_ind:
-        try:
-            info = yf.Ticker(ticker).info
-            sec = info.get("sector", "") or ""
-            ind = info.get("industry", "") or ""
-            if ind:
-                df_screen.loc[df_screen["Ticker"] == ticker, "Sector"]   = sec
-                df_screen.loc[df_screen["Ticker"] == ticker, "Industry"]  = ind
-                df_all.loc[df_all["Ticker"] == ticker, "Sector"]          = sec
-                df_all.loc[df_all["Ticker"] == ticker, "Industry"]        = ind
-                print(f"  {ticker}: {ind}")
-        except Exception:
-            pass
-        time.sleep(0.2)
-    # Industry RS再計算
-    valid = df_all[df_all["Industry"].fillna("") != ""]
-    if len(valid) > 0:
-        ind_rs_map = valid.groupby("Industry")["RS Rating"].mean().rank(ascending=False).astype(int)
-        df_screen["Industry RS"] = df_screen["Industry"].map(ind_rs_map)
-        df_all["Industry RS"]    = df_all["Industry"].map(ind_rs_map)
+    # Industry情報が欠けている銘柄をyfinanceで補完
+    missing_ind = df_screen[df_screen["Industry"].fillna("") == ""]["Ticker"].tolist()
+    if missing_ind:
+        print(f"Industry補完中（{len(missing_ind)}銘柄）...")
+        for ticker in missing_ind:
+            try:
+                info = yf.Ticker(ticker).info
+                sec = info.get("sector", "") or ""
+                ind = info.get("industry", "") or ""
+                if ind:
+                    df_screen.loc[df_screen["Ticker"] == ticker, "Sector"]  = sec
+                    df_screen.loc[df_screen["Ticker"] == ticker, "Industry"] = ind
+                    df_all.loc[df_all["Ticker"] == ticker, "Sector"]         = sec
+                    df_all.loc[df_all["Ticker"] == ticker, "Industry"]       = ind
+                    print(f"  {ticker}: {ind}")
+            except Exception:
+                pass
+            time.sleep(0.2)
+        # Industry RS再計算
+        valid = df_all[df_all["Industry"].fillna("") != ""]
+        if len(valid) > 0:
+            ind_rs_map = valid.groupby("Industry")["RS Rating"].mean().rank(ascending=False).astype(int)
+            df_screen["Industry RS"] = df_screen["Industry"].map(ind_rs_map)
+            df_all["Industry RS"]    = df_all["Industry"].map(ind_rs_map)
 
-tickers_screen = df_screen["Ticker"].tolist()
+    tickers_screen = df_screen["Ticker"].tolist()
 
     # EPS加速
     eps_map = calc_eps_accel(tickers_screen)
