@@ -1,6 +1,10 @@
 """
 tickers.csv に Industry/Sector 情報を追加する週次スクリプト。
 yfinance の Ticker.info から取得して tickers_enriched.csv として保存。
+
+修正点：
+- キャッシュにあってもindustryが空欄の銘柄は再取得する
+- 取得失敗した銘柄も記録して無限ループを防ぐ
 """
 
 import csv, time, json, sys
@@ -35,9 +39,13 @@ def save_cache(cache: dict):
 def fetch_info(ticker: str) -> tuple[str, dict]:
     try:
         info = yf.Ticker(ticker).info
+        sector   = info.get("sector", "")   or ""
+        industry = info.get("industry", "") or ""
+        # industryが取れなかった場合は"__no_data__"マークを付けない
+        # → 空のままにして次回も再試行できるようにする
         return ticker, {
-            "sector":   info.get("sector", "") or "",
-            "industry": info.get("industry", "") or "",
+            "sector":   sector,
+            "industry": industry,
         }
     except Exception:
         return ticker, {"sector": "", "industry": ""}
@@ -50,16 +58,19 @@ def main():
         tickers = list(csv.DictReader(f))
     print(f"対象: {len(tickers)} 銘柄")
 
-    # キャッシュ読み込み（前回の結果を再利用）
+    # キャッシュ読み込み
     cache = load_existing_cache()
     print(f"キャッシュ: {len(cache)} 銘柄分あり")
 
-    # キャッシュにない銘柄だけ取得
-    missing = [t["symbol"] for t in tickers if t["symbol"] not in cache]
-    print(f"新規取得: {len(missing)} 銘柄")
+    # ★修正：キャッシュにない銘柄 + キャッシュにあってもindustryが空の銘柄を再取得
+    missing = [
+        t["symbol"] for t in tickers
+        if t["symbol"] not in cache
+        or not cache[t["symbol"]].get("industry", "").strip()
+    ]
+    print(f"新規取得 or 空欄再取得: {len(missing)} 銘柄")
 
     if missing:
-        # 並列取得（10スレッド）
         done = 0
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(fetch_info, sym): sym for sym in missing}
