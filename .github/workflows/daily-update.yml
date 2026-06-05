@@ -22,7 +22,7 @@ jobs:
 
       - name: ライブラリをインストール
         run: |
-          pip install yfinance pandas numpy requests beautifulsoup4
+          pip install yfinance pandas numpy requests
 
       - name: データ生成スクリプトを実行
         run: python stock-screener/scripts/generate.py
