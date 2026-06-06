@@ -21,9 +21,9 @@ jobs:
           python-version: "3.11"
 
       - name: ライブラリをインストール
-        run: pip install yfinance pandas requests
+        run: pip install requests beautifulsoup4
 
-      - name: Industry情報を取得
+      - name: Industry情報を取得（Finviz）
         run: python stock-screener/scripts/enrich_tickers.py
 
       - name: 更新されたCSVをコミット
@@ -34,7 +34,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "変更なし。コミットをスキップします。"
           else
-            git commit -m "🏭 Weekly industry enrichment: $(date -u '+%Y-%m-%d')"
+            git commit -m "🏭 Weekly industry enrichment (Finviz): $(date -u '+%Y-%m-%d')"
             git fetch origin main
             git rebase origin/main
             git push
