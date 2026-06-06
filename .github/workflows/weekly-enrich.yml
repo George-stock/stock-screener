@@ -23,8 +23,8 @@ jobs:
       - name: ライブラリをインストール
         run: pip install requests beautifulsoup4
 
-      - name: Industry情報を取得（Finviz）
-　　　　　run: python stock-screener/stock-screener/scripts/enrich_tickers.py
+      - name: Industry情報を取得（Finviz）　
+        run: python stock-screener/stock-screener/scripts/enrich_tickers.py
 
 
       - name: 更新されたCSVをコミット
