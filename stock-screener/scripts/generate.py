@@ -26,7 +26,6 @@ try:
     import numpy as np
     import yfinance as yf
     import requests
-    from bs4 import BeautifulSoup
     print("✅ ライブラリ読み込み完了")
 except ImportError as e:
     print(f"❌ ライブラリ不足: {e}")
@@ -66,115 +65,77 @@ def fmt_vol(v):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Finvizスクレイピング（スクリーニング通過銘柄用）
+# Yahoo Finance APIでスクリーニング通過銘柄のIndustry補完
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FINVIZ_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
+YF_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
 }
 
-# Finvizラベル → 自分のカラム名の対応
-FINVIZ_LABEL_MAP = {
-    "Sector":        "Sector",
-    "Industry":      "Industry",
-    "Country":       "Country",
-    "Market Cap":    "Market Cap",
-    "P/E":           "P/E",
-    "Fwd P/E":       "Fwd P/E",
-    "PEG":           "PEG",
-    "P/S":           "P/S",
-    "P/B":           "P/B",
-    "P/C":           "P/C",
-    "P/FCF":         "P/FCF",
-    "EPS (ttm)":     "EPS",
-    "EPS this Y":    "EPS this Y",
-    "EPS next Y":    "EPS next Y",
-    "EPS past 5Y":   "EPS past 5Y",
-    "EPS next 5Y":   "EPS next 5Y",
-    "Sales past 5Y": "Sales past 5Y",
-    "EPS Q/Q":       "EPS Q/Q",
-    "Sales Q/Q":     "Sales Q/Q",
-    "Insider Own":   "Insider Own",
-    "Insider Trans": "Insider Trans",
-    "Inst Own":      "Inst Own",
-    "Inst Trans":    "Inst Trans",
-    "Float Short":   "Float Short",
-    "Short Ratio":   "Short Ratio",
-    "ROA":           "ROA",
-    "ROE":           "ROE",
-    "ROI":           "ROI",
-    "Curr R":        "Curr R",
-    "Quick R":       "Quick R",
-    "LTDebt/Eq":     "LTDebt/Eq",
-    "Debt/Eq":       "Debt/Eq",
-    "Gross M":       "Gross M",
-    "Oper M":        "Oper M",
-    "Profit M":      "Profit M",
-    "Dividend":      "Dividend",
-    "Payout Ratio":  "Payout Ratio",
-    "Beta":          "Beta",
-    "ATR":           "ATR",
-    "RSI (14)":      "RSI",
-    "Recom":         "Recom",
-    "Target Price":  "Target Price",
-    "Earnings":      "Earnings",
-    "IPO Date":      "IPO Date",
-    "Outstanding":   "Outstanding",
-    "Float":         "Float",
-    "Perf Week":     "Perf Week",
-    "Perf Month":    "Perf Month",
-    "Perf Quart":    "Perf Quart",
-    "Perf Half":     "Perf Half",
-    "Perf Year":     "Perf Year",
-    "Perf YTD":      "Perf YTD",
-    "52W High":      "52W High",
-    "52W Low":       "52W Low",
-    "SMA20":         "SMA20",
-    "SMA50":         "SMA50",
-    "SMA200":        "SMA200",
-}
-
-def fetch_finviz(ticker: str) -> dict:
-    """Finvizから1銘柄のデータを取得して辞書で返す。失敗時は空辞書。"""
+def fetch_yahoo_profile(ticker: str) -> dict:
+    """Yahoo Finance APIから1銘柄のSector/Industryを取得。"""
     try:
-        url = f"https://finviz.com/quote.ashx?t={ticker}&ty=c&ta=1&p=d"
-        resp = requests.get(url, headers=FINVIZ_HEADERS, timeout=10)
+        url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=assetProfile,summaryDetail,defaultKeyStatistics,financialData"
+        resp = requests.get(url, headers=YF_HEADERS, timeout=10)
         if resp.status_code != 200:
             return {}
-        soup = BeautifulSoup(resp.text, "html.parser")
+        data = resp.json()
+        result_list = data.get("quoteSummary", {}).get("result", [])
+        if not result_list:
+            return {}
+        result = result_list[0]
 
-        # snapshot-tableからラベル→値を抽出
-        result = {}
-        cells = soup.select("td.snapshot-td2-cp, td.snapshot-td2")
-        label = None
-        for cell in cells:
-            if "snapshot-td2-cp" in cell.get("class", []):
-                label = cell.get_text(strip=True)
-            elif "snapshot-td2" in cell.get("class", []) and label:
-                value = cell.get_text(strip=True)
-                if label in FINVIZ_LABEL_MAP:
-                    col = FINVIZ_LABEL_MAP[label]
-                    result[col] = value if value != "-" else None
-                label = None
-        return result
+        profile  = result.get("assetProfile", {})
+        summary  = result.get("summaryDetail", {})
+        keystats = result.get("defaultKeyStatistics", {})
+        findata  = result.get("financialData", {})
+
+        def raw(obj, key):
+            v = obj.get(key, {})
+            if isinstance(v, dict): return v.get("raw")
+            return v
+
+        def fmt_pct_val(v):
+            if v is None: return None
+            return f"{v*100:.2f}%"
+
+        return {
+            "Sector":       profile.get("sector", "") or "",
+            "Industry":     profile.get("industry", "") or "",
+            "Country":      profile.get("country", "") or "",
+            "Float Short":  fmt_pct_val(raw(keystats, "shortPercentOfFloat")),
+            "Short Ratio":  raw(keystats, "shortRatio"),
+            "Insider Own":  fmt_pct_val(raw(keystats, "heldPercentInsiders")),
+            "Inst Own":     fmt_pct_val(raw(keystats, "heldPercentInstitutions")),
+            "Beta":         raw(summary, "beta"),
+            "Recom":        raw(findata, "recommendationMean"),
+            "Target Price": raw(findata, "targetMeanPrice"),
+            "ROA":          fmt_pct_val(raw(findata, "returnOnAssets")),
+            "ROE":          fmt_pct_val(raw(findata, "returnOnEquity")),
+            "Gross M":      fmt_pct_val(raw(findata, "grossMargins")),
+            "Oper M":       fmt_pct_val(raw(findata, "operatingMargins")),
+            "Profit M":     fmt_pct_val(raw(findata, "profitMargins")),
+            "Curr R":       raw(findata, "currentRatio"),
+            "Quick R":      raw(findata, "quickRatio"),
+            "Debt/Eq":      raw(findata, "debtToEquity"),
+        }
     except Exception as e:
-        print(f"  Finviz取得エラー {ticker}: {e}")
+        print(f"  Yahoo取得エラー {ticker}: {e}")
         return {}
 
 
-def fetch_finviz_batch(tickers: list[str]) -> dict:
-    """複数銘柄をFinvizから取得。{ticker: {col: val}} を返す。"""
+def fetch_yahoo_batch(tickers: list[str]) -> dict:
+    """複数銘柄をYahoo Finance APIから取得。{ticker: {col: val}} を返す。"""
     results = {}
     total = len(tickers)
     for i, ticker in enumerate(tickers):
         if not time_ok():
             break
-        data = fetch_finviz(ticker)
+        data = fetch_yahoo_profile(ticker)
         results[ticker] = data
         status = "✅" if data.get("Industry") else "⚠️"
-        print(f"  {status} Finviz {ticker} ({i+1}/{total}): {data.get('Industry','取得失敗')}")
-        time.sleep(1.5)  # Bot対策で1.5秒待機
+        print(f"  {status} Yahoo {ticker} ({i+1}/{total}): {data.get('Industry','取得失敗')}")
+        time.sleep(0.5)
     return results
 
 
@@ -543,39 +504,46 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Finvizでスクリーニング通過銘柄を補完
+# Yahoo Finance APIでスクリーニング通過銘柄を補完
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.DataFrame:
-    """スクリーニング通過銘柄をFinvizで補完（Industry含む全カラム）。"""
+    """スクリーニング通過銘柄をYahoo Finance APIで補完（Industry含む各種カラム）。"""
     if not time_ok():
         return df_screen
 
-    tickers = df_screen["Ticker"].tolist()
-    print(f"Finvizからデータ取得中（{len(tickers)}銘柄）... [{elapsed():.0f}s]")
+    # Industry空欄の銘柄だけを取得対象にする
+    tickers_need = df_screen[df_screen["Industry"].fillna("") == ""]["Ticker"].tolist()
+    tickers_all  = df_screen["Ticker"].tolist()
 
-    finviz_data = fetch_finviz_batch(tickers)
+    print(f"Yahoo Finance APIからデータ取得中（{len(tickers_all)}銘柄）... [{elapsed():.0f}s]")
 
-    for ticker, fdata in finviz_data.items():
-        if not fdata:
+    yahoo_data = fetch_yahoo_batch(tickers_all)
+
+    for ticker, ydata in yahoo_data.items():
+        if not ydata:
             continue
-        mask = df_screen["Ticker"] == ticker
+        mask     = df_screen["Ticker"] == ticker
         mask_all = df_all["Ticker"] == ticker
 
-        for col, val in fdata.items():
-            if col in df_screen.columns:
-                df_screen.loc[mask, col] = val
-            if col in df_all.columns and col in ("Sector", "Industry"):
-                df_all.loc[mask_all, col] = val
+        for col, val in ydata.items():
+            if col in df_screen.columns and val is not None:
+                # 既存値がある場合は上書きしない（Industry以外）
+                if col in ("Sector", "Industry"):
+                    if not df_screen.loc[mask, col].values[0]:
+                        df_screen.loc[mask, col] = val
+                    if not df_all.loc[mask_all, col].values[0]:
+                        df_all.loc[mask_all, col] = val
+                else:
+                    df_screen.loc[mask, col] = val
 
-    # Industry RS再計算（Finvizで補完後）
+    # Industry RS再計算（Yahoo補完後）
     _recalc_industry_rs(df_all)
-    df_screen["Industry RS"] = df_screen["Industry"].map(
-        df_all[df_all["Industry"].fillna("") != ""]
-        .groupby("Industry")["RS Rating"]
-        .mean().rank(ascending=False).astype(int)
-    ) if len(df_all[df_all["Industry"].fillna("") != ""]) > 0 else None
+    valid_ind = df_all[df_all["Industry"].fillna("") != ""]
+    if len(valid_ind) > 0:
+        ind_rank = valid_ind.groupby("Industry")["RS Rating"].mean().rank(ascending=False).astype(int)
+        df_screen["Industry RS"] = df_screen["Industry"].map(ind_rank)
 
-    print(f"  → Finviz補完完了 [{elapsed():.0f}s]")
+    print(f"  → Yahoo補完完了 [{elapsed():.0f}s]")
     return df_screen
 
 
