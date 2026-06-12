@@ -144,6 +144,19 @@ def fetch_yahoo_batch(tickers: list[str]) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def load_industry_cache() -> dict:
     cache = {}
+    # まずindustry_cache.jsonから読み込む（Finvizデータ）
+    cache_path = SCRIPT_DIR / "industry_cache.json"
+    if cache_path.exists():
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                cache = json.load(f)
+            with_ind = sum(1 for v in cache.values() if v.get("industry"))
+            print(f"industry_cache.json: {len(cache)}銘柄 (Industry付き: {with_ind})")
+            return cache
+        except Exception as e:
+            print(f"  industry_cache.json読み込みエラー: {e}")
+
+    # フォールバック：data.jsonから読み込む
     if not DATA_JSON.exists():
         return cache
     try:
@@ -504,46 +517,124 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Yahoo Finance APIでスクリーニング通過銘柄を補完
+# スクリーニング通過銘柄のみyfinanceで個別補完
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.DataFrame:
-    """スクリーニング通過銘柄をYahoo Finance APIで補完（Industry含む各種カラム）。"""
-    if not time_ok():
-        return df_screen
+    """
+    スクリーニング通過銘柄（数十件）のみyfinanceで個別取得して補完。
+    - Industry/Sector空欄の銘柄を補完
+    - ファンダメンタル（ROA/ROE/Beta/Float Short等）も取得
+    industry_cache.jsonがあればそちらを優先使用。
+    """
+    # まずindustry_cache.jsonから補完（Finvizデータ）
+    cache_path = SCRIPT_DIR / "industry_cache.json"
+    cache = {}
+    if cache_path.exists():
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception:
+            pass
 
-    # Industry空欄の銘柄だけを取得対象にする
-    tickers_need = df_screen[df_screen["Industry"].fillna("") == ""]["Ticker"].tolist()
-    tickers_all  = df_screen["Ticker"].tolist()
+    col_map = {
+        "market_cap":   "Market Cap",
+        "pe":           "P/E",
+        "fwd_pe":       "Fwd P/E",
+        "eps_qoq":      "EPS Q/Q",
+        "eps_past5y":   "EPS past 5Y",
+        "sales_past5y": "Sales past 5Y",
+        "insider_own":  "Insider Own",
+        "inst_own":     "Inst Own",
+        "float_short":  "Float Short",
+        "short_ratio":  "Short Ratio",
+        "roa":          "ROA",
+        "roe":          "ROE",
+        "roi":          "ROI",
+        "gross_m":      "Gross M",
+        "oper_m":       "Oper M",
+        "profit_m":     "Profit M",
+        "beta":         "Beta",
+        "recom":        "Recom",
+    }
 
-    print(f"Yahoo Finance APIからデータ取得中（{len(tickers_all)}銘柄）... [{elapsed():.0f}s]")
-
-    yahoo_data = fetch_yahoo_batch(tickers_all)
-
-    for ticker, ydata in yahoo_data.items():
-        if not ydata:
+    # cacheから補完
+    for idx in df_screen.index:
+        ticker = df_screen.at[idx, "Ticker"]
+        cdata  = cache.get(ticker, {})
+        if not cdata:
             continue
-        mask     = df_screen["Ticker"] == ticker
-        mask_all = df_all["Ticker"] == ticker
+        mask = df_screen["Ticker"] == ticker
+        if not df_screen.at[idx, "Industry"] and cdata.get("industry"):
+            df_screen.loc[mask, "Industry"] = cdata["industry"]
+            df_screen.loc[mask, "Sector"]   = cdata.get("sector", "")
+            mask_all = df_all["Ticker"] == ticker
+            df_all.loc[mask_all, "Industry"] = cdata["industry"]
+            df_all.loc[mask_all, "Sector"]   = cdata.get("sector", "")
+        for cache_key, df_col in col_map.items():
+            val = cdata.get(cache_key)
+            if val and df_col in df_screen.columns:
+                df_screen.loc[mask, df_col] = val
 
-        for col, val in ydata.items():
-            if col in df_screen.columns and val is not None:
-                # 既存値がある場合は上書きしない（Industry以外）
-                if col in ("Sector", "Industry"):
-                    if not df_screen.loc[mask, col].values[0]:
+    # スクリーニング通過銘柄を全員yfinanceで最新データ取得
+    all_tickers = df_screen["Ticker"].tolist()
+    if all_tickers and time_ok():
+        print(f"  yfinanceで全銘柄最新データ取得中（{len(all_tickers)}銘柄）...")
+        for ticker in all_tickers:
+            if not time_ok():
+                break
+            try:
+                info = yf.Ticker(ticker).info
+                industry = info.get("industry", "") or ""
+                sector   = info.get("sector", "")   or ""
+
+                mask     = df_screen["Ticker"] == ticker
+                mask_all = df_all["Ticker"] == ticker
+
+                # Industry/Sectorを上書き（yfinanceが取れた場合）
+                if industry:
+                    df_screen.loc[mask, "Industry"] = industry
+                    df_screen.loc[mask, "Sector"]   = sector
+                    df_all.loc[mask_all, "Industry"] = industry
+                    df_all.loc[mask_all, "Sector"]   = sector
+
+                # ファンダメンタル最新値で上書き
+                def fmt_p(v):
+                    if v is None: return None
+                    return f"{v*100:.2f}%"
+
+                yf_vals = {
+                    "Float Short":  fmt_p(info.get("shortPercentOfFloat")),
+                    "Short Ratio":  info.get("shortRatio"),
+                    "Insider Own":  fmt_p(info.get("heldPercentInsiders")),
+                    "Inst Own":     fmt_p(info.get("heldPercentInstitutions")),
+                    "Beta":         info.get("beta"),
+                    "ROA":          fmt_p(info.get("returnOnAssets")),
+                    "ROE":          fmt_p(info.get("returnOnEquity")),
+                    "Gross M":      fmt_p(info.get("grossMargins")),
+                    "Oper M":       fmt_p(info.get("operatingMargins")),
+                    "Profit M":     fmt_p(info.get("profitMargins")),
+                    "Recom":        info.get("recommendationMean"),
+                    "Target Price": info.get("targetMeanPrice"),
+                    "P/E":          info.get("trailingPE"),
+                    "Fwd P/E":      info.get("forwardPE"),
+                }
+                for col, val in yf_vals.items():
+                    if val is not None and col in df_screen.columns:
                         df_screen.loc[mask, col] = val
-                    if not df_all.loc[mask_all, col].values[0]:
-                        df_all.loc[mask_all, col] = val
-                else:
-                    df_screen.loc[mask, col] = val
 
-    # Industry RS再計算（Yahoo補完後）
+                print(f"    ✅ {ticker}: {industry or '空欄'}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"    ⚠️ {ticker}: {e}")
+
+    # Industry RS再計算
     _recalc_industry_rs(df_all)
     valid_ind = df_all[df_all["Industry"].fillna("") != ""]
     if len(valid_ind) > 0:
         ind_rank = valid_ind.groupby("Industry")["RS Rating"].mean().rank(ascending=False).astype(int)
         df_screen["Industry RS"] = df_screen["Industry"].map(ind_rank)
 
-    print(f"  → Yahoo補完完了 [{elapsed():.0f}s]")
+    print(f"  → 補完完了 [{elapsed():.0f}s]")
     return df_screen
 
 
