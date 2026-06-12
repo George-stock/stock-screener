@@ -551,6 +551,13 @@ def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.Data
 # EPS加速判定
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def calc_eps_accel(tickers: list[str]) -> dict:
+    """
+    EPS加速判定（IBDスタイル）
+    quarterly_income_stmtのカラム順: 新→旧 (q0=最新, q1=1期前, q2=2期前, q3=3期前)
+    YoY_latest = (q0 - q2) / abs(q2)  ← 最新Q vs 1年前の同Q
+    YoY_prev   = (q1 - q3) / abs(q3)  ← 1期前Q vs 1年前の1期前Q
+    YoY_latest > YoY_prev → 加速
+    """
     if not time_ok():
         return {}
     result = {}
@@ -561,23 +568,71 @@ def calc_eps_accel(tickers: list[str]) -> dict:
             t  = yf.Ticker(ticker)
             qe = t.quarterly_income_stmt
             if qe is None or qe.empty: continue
-            ni_rows = [r for r in qe.index if "Net Income" in str(r)]
-            if not ni_rows: continue
-            eps = qe.loc[ni_rows[0]].dropna()
-            if len(eps) < 2: continue
-            q0, q1 = float(eps.iloc[0]), float(eps.iloc[1])
-            yoy0 = (q0 - q1) / abs(q1) * 100 if q1 != 0 else (100.0 if q0 > q1 else 0)
-            yoy1 = 0
-            if len(eps) >= 4:
-                q2 = float(eps.iloc[2])
-                yoy1 = (q1 - q2) / abs(q2) * 100 if q2 != 0 else 0
-            result[ticker] = {
-                "eps_accel":  "Y" if yoy0 > yoy1 else "N",
-                "eps_yoy_q0": round(yoy0, 1),
-                "eps_yoy_q1": round(yoy1, 1),
-                "rev_accel": "", "rev_yoy_q0": None, "rev_yoy_q1": None,
-            }
-        except Exception: pass
+
+            # Net Income行を探す
+            ni_rows = [r for r in qe.index if "Net Income" in str(r) and "Minority" not in str(r)]
+            # Revenue行を探す
+            rev_rows = [r for r in qe.index if r in ("Total Revenue", "Revenue")]
+
+            eps_accel = ""
+            eps_yoy0 = None
+            eps_yoy1 = None
+
+            if ni_rows:
+                ni = qe.loc[ni_rows[0]].dropna()
+                if len(ni) >= 3:
+                    q0 = float(ni.iloc[0])
+                    q1 = float(ni.iloc[1])
+                    q2 = float(ni.iloc[2])  # 1年前同Q
+                    q3 = float(ni.iloc[3]) if len(ni) >= 4 else None
+
+                    def yoy(cur, prev):
+                        if prev == 0: return 100.0 if cur > 0 else -100.0
+                        return (cur - prev) / abs(prev) * 100
+
+                    yoy0 = yoy(q0, q2)
+                    eps_yoy0 = round(yoy0, 1)
+
+                    if q3 is not None:
+                        yoy1 = yoy(q1, q3)
+                        eps_yoy1 = round(yoy1, 1)
+                        eps_accel = "Y" if yoy0 > yoy1 else "N"
+                    else:
+                        eps_accel = "Y" if yoy0 > 0 else "N"
+
+            rev_accel = ""
+            rev_yoy0 = None
+            rev_yoy1 = None
+
+            if rev_rows:
+                rv = qe.loc[rev_rows[0]].dropna()
+                if len(rv) >= 3:
+                    r0 = float(rv.iloc[0])
+                    r1 = float(rv.iloc[1])
+                    r2 = float(rv.iloc[2])
+                    r3 = float(rv.iloc[3]) if len(rv) >= 4 else None
+
+                    ryoy0 = yoy(r0, r2)
+                    rev_yoy0 = round(ryoy0, 1)
+
+                    if r3 is not None:
+                        ryoy1 = yoy(r1, r3)
+                        rev_yoy1 = round(ryoy1, 1)
+                        rev_accel = "Y" if ryoy0 > ryoy1 else "N"
+                    else:
+                        rev_accel = "Y" if ryoy0 > 0 else "N"
+
+            if eps_accel:
+                result[ticker] = {
+                    "eps_accel":  eps_accel,
+                    "eps_yoy_q0": eps_yoy0,
+                    "eps_yoy_q1": eps_yoy1,
+                    "rev_accel":  "",        # 本家も未実装
+                    "rev_yoy_q0": rev_yoy0,  # 参考値のみ
+                    "rev_yoy_q1": None,      # 本家もnull
+                }
+        except Exception:
+            pass
         time.sleep(0.05)
     print(f"  → {len(result)} 銘柄完了")
     return result
@@ -687,7 +742,55 @@ def build_hvc(tickers: list[str], industry_map: dict) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DataFrame → days形式
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def df_to_day(df: pd.DataFrame, today: str) -> dict:
+def build_insights(df: pd.DataFrame, ind_rs_today: dict) -> dict:
+    """サマリーカード用insightsを生成。"""
+    import numpy as np
+
+    # RS≥80, RS≥90
+    rs_ge_80 = int((df["RS Rating"] >= 80).sum())
+    rs_ge_90 = int((df["RS Rating"] >= 90).sum())
+
+    # Top Industries（Industry RSランク上位）
+    top_industries = []
+    for r in (ind_rs_today.get("industry_rs") or [])[:5]:
+        top_industries.append({"name": r["industry"], "rank": r["rank"]})
+
+    # 集中Industry（3銘柄以上）
+    concentrated = []
+    if "Industry" in df.columns:
+        ind_counts = df[df["Industry"].fillna("") != ""]["Industry"].value_counts()
+        for ind, cnt in ind_counts.items():
+            if cnt >= 3:
+                concentrated.append([ind, int(cnt)])
+
+    # 乖離（RS Rating高いのにIndustry RSが低い銘柄）
+    divergent = []
+    if "Industry RS" in df.columns and "Industry" in df.columns:
+        total_ind = len(ind_rs_today.get("industry_rs") or [])
+        if total_ind > 0:
+            for _, row in df.iterrows():
+                rs  = row.get("RS Rating", 0) or 0
+                irs = row.get("Industry RS")
+                ind = row.get("Industry", "") or ""
+                if rs >= 85 and irs and pd.notna(irs) and int(irs) > total_ind * 0.6 and ind:
+                    divergent.append({
+                        "ticker":      row.get("Ticker", ""),
+                        "rs":          int(rs),
+                        "industry":    ind,
+                        "industry_rs": int(irs),
+                    })
+
+    return {
+        "rs_ge_80":       rs_ge_80,
+        "rs_ge_90":       rs_ge_90,
+        "top_industries": top_industries,
+        "total_industries": len(ind_rs_today.get("industry_rs") or []),
+        "concentrated":   concentrated,
+        "divergent":      divergent,
+    }
+
+
+def df_to_day(df: pd.DataFrame, today: str, insights: dict = None) -> dict:
     export_df = df.drop(columns=[c for c in df.columns if c.startswith("_")], errors="ignore")
     columns   = list(export_df.columns)
     rows = []
@@ -699,7 +802,10 @@ def df_to_day(df: pd.DataFrame, today: str) -> dict:
             elif hasattr(val, "item"): r.append(val.item())
             else: r.append(val)
         rows.append(r)
-    return {"date": today, "count": len(rows), "columns": columns, "rows": rows}
+    day = {"date": today, "count": len(rows), "columns": columns, "rows": rows}
+    if insights:
+        day["insights"] = insights
+    return day
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -739,15 +845,16 @@ def main():
     df_screen["EPS加速"] = df_screen["Ticker"].map(
         lambda t: "▲加速" if eps_map.get(t, {}).get("eps_accel") == "Y" else "—"
     )
-    df_screen["売上加速"] = "—"
+    df_screen["売上加速"] = "—"  # 本家も未実装
 
     ind_rs_today = build_industry_rs(df_all, today)
     hvc_data     = build_hvc(tickers_screen, industry_map)
     hvc_set      = {r["ticker"] for r in hvc_data["rows"]}
     df_screen["HV"] = df_screen["Ticker"].map(lambda t: "HV1" if t in hvc_set else "")
 
+    insights = build_insights(df_screen, ind_rs_today)
     days = [d for d in existing.get("days", []) if d["date"] != today]
-    days.insert(0, df_to_day(df_screen, today))
+    days.insert(0, df_to_day(df_screen, today, insights))
     days = days[:KEEP_DAYS]
 
     trends = [t for t in existing.get("industry_trend", []) if t["date"] != today]
