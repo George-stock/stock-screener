@@ -128,5 +128,154 @@
   </footer>
 
   <script src="app.js"></script>
+  <script>
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 業種名クリックでティッカーをコピーする機能
+  // 対象：① 集中Industry ② Top Industry ③ ヒートマップ業種行
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  (function() {
+
+    // 抽出リストから指定業種のティッカーを取得
+    function getTickersByIndustry(industryName) {
+      const headCells = document.querySelectorAll('#screen-head th');
+      let tickerIdx = -1, industryIdx = -1;
+      headCells.forEach((th, i) => {
+        const t = th.textContent.trim();
+        if (t === 'Ticker') tickerIdx = i;
+        if (t === 'Industry') industryIdx = i;
+      });
+      if (tickerIdx === -1 || industryIdx === -1) return [];
+
+      const tickers = [];
+      document.querySelectorAll('#screen-body tr').forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (!cells[tickerIdx] || !cells[industryIdx]) return;
+        const ticker = cells[tickerIdx].textContent.trim();
+        const industry = cells[industryIdx].textContent.trim();
+        if (industry && (
+          industry === industryName ||
+          industry.includes(industryName) ||
+          industryName.includes(industry)
+        )) {
+          tickers.push(ticker);
+        }
+      });
+      return tickers;
+    }
+
+    // universe.jsonから指定業種の全銘柄を取得（ヒートマップ用）
+    // app.jsのstateから業種に属する銘柄を取得
+    function getTickersByIndustryFromUniverse(industryName) {
+      // まず抽出リストから取得
+      const fromScreen = getTickersByIndustry(industryName);
+      if (fromScreen.length) return fromScreen;
+      return [];
+    }
+
+    // コピー実行
+    function copyTickers(tickers, el, origText) {
+      if (!tickers.length) {
+        const prev = el.textContent;
+        el.textContent = '銘柄なし';
+        setTimeout(() => el.textContent = prev, 1500);
+        return;
+      }
+      const text = tickers.join(',');
+      navigator.clipboard.writeText(text).then(() => {
+        const prev = el.textContent;
+        el.textContent = `✅${tickers.length}銘柄`;
+        setTimeout(() => el.textContent = prev, 2000);
+      }).catch(() => {
+        // clipboardが使えない場合はプロンプト
+        prompt('ティッカーをコピー:', text);
+      });
+    }
+
+    // クリッカブルスタイルを付与
+    function makeClickable(el) {
+      el.style.cursor = 'pointer';
+      el.style.textDecoration = 'underline dotted';
+      el.title = 'タップでティッカーをコピー';
+    }
+
+    function addCopyHandlers() {
+      // ① 集中Industry（🔥）の銘柄数
+      document.querySelectorAll('#insights li').forEach(li => {
+        const vEl = li.querySelector('.v');
+        if (!vEl || vEl.dataset.copyHandled) return;
+        vEl.dataset.copyHandled = '1';
+        makeClickable(vEl);
+        vEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const indEl = li.querySelector('span:not(.v)');
+          if (!indEl) return;
+          const indName = indEl.textContent.trim();
+          const tickers = getTickersByIndustry(indName);
+          copyTickers(tickers, vEl);
+        });
+      });
+
+      // ② Top Industry（🏆）の各行
+      document.querySelectorAll('#insights ul li').forEach(li => {
+        if (li.dataset.topCopyHandled) return;
+        // 順位表示（例：「1位」）がある行
+        const vEl = li.querySelector('.v');
+        if (!vEl) return;
+        if (!vEl.textContent.includes('位')) return;
+        li.dataset.topCopyHandled = '1';
+        makeClickable(li);
+        li.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const indEl = li.querySelector('span:not(.v)');
+          if (!indEl) return;
+          const indName = indEl.textContent.trim();
+          const tickers = getTickersByIndustry(indName);
+          copyTickers(tickers, vEl);
+        });
+      });
+
+      // ③ ヒートマップ（業種RSランキング）の業種名・銘柄数
+      document.querySelectorAll('#heatmap-body tr').forEach(tr => {
+        if (tr.dataset.heatCopyHandled) return;
+        const nameEl = tr.querySelector('.ind-name');
+        const countEl = tr.querySelector('.ind-count');
+        if (!nameEl) return;
+        tr.dataset.heatCopyHandled = '1';
+
+        // 業種名クリック
+        makeClickable(nameEl);
+        nameEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const indName = nameEl.textContent.trim();
+          const tickers = getTickersByIndustry(indName);
+          copyTickers(tickers, nameEl);
+        });
+
+        // 銘柄数クリック
+        if (countEl) {
+          makeClickable(countEl);
+          countEl.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const indName = nameEl.textContent.trim();
+            const tickers = getTickersByIndustry(indName);
+            copyTickers(tickers, countEl);
+          });
+        }
+      });
+    }
+
+    // insightsとheatmapの変更を監視
+    const insightsEl = document.getElementById('insights');
+    const heatmapEl = document.getElementById('heatmap-body');
+
+    if (insightsEl) {
+      new MutationObserver(addCopyHandlers).observe(insightsEl, { childList: true, subtree: true });
+    }
+    if (heatmapEl) {
+      new MutationObserver(addCopyHandlers).observe(heatmapEl, { childList: true, subtree: true });
+    }
+
+  })();
+  </script>
 </body>
 </html>
