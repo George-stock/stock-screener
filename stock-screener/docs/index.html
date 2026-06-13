@@ -149,7 +149,7 @@
       return names;
     }
 
-    // 抽出リストから指定業種のティッカーを取得
+    // 抽出リストから指定業種のティッカーを取得（スクリーニング通過銘柄）
     function getTickersByIndustry(industryName) {
       const headCells = document.querySelectorAll('#screen-head th');
       let tickerIdx = -1, industryIdx = -1;
@@ -179,6 +179,47 @@
         }
       });
       return tickers;
+    }
+
+    // universe.jsonから指定業種の全銘柄を取得
+    function getTickersByIndustryFromUniverse(industryName) {
+      if (!window._universeData) return null; // データ未ロード
+      const searchNames = getAltNames(industryName);
+      const jaToEn = {};
+      if (typeof INDUSTRY_JA !== 'undefined')
+        Object.entries(INDUSTRY_JA).forEach(([en, ja]) => { jaToEn[ja] = en; });
+
+      const tickers = [];
+      Object.entries(window._universeData).forEach(([ticker, val]) => {
+        if (!val || !val[2]) return;
+        const ind = val[2];
+        const indEn = jaToEn[ind] || ind;
+        const indJa2 = (typeof INDUSTRY_JA !== 'undefined' && INDUSTRY_JA[ind]) || ind;
+        if (searchNames.has(ind.toLowerCase().trim()) ||
+            searchNames.has(indEn.toLowerCase().trim()) ||
+            searchNames.has(indJa2.toLowerCase().trim())) {
+          tickers.push(ticker);
+        }
+      });
+      // RS順にソート
+      tickers.sort((a, b) => {
+        const rsA = window._universeData[a]?.[0] || 0;
+        const rsB = window._universeData[b]?.[0] || 0;
+        return rsB - rsA;
+      });
+      return tickers;
+    }
+
+    // universe.jsonを非同期ロード
+    fetch('universe.json').then(r => r.json()).then(data => {
+      window._universeData = data.tickers || {};
+    }).catch(() => {});
+
+    // ヒートマップ用：universe全体から取得、なければ抽出リストから
+    function getTickersForHeatmap(industryName) {
+      const fromUniverse = getTickersByIndustryFromUniverse(industryName);
+      if (fromUniverse !== null && fromUniverse.length > 0) return { tickers: fromUniverse, fromUniverse: true };
+      return { tickers: getTickersByIndustry(industryName), fromUniverse: false };
     }
 
     // ティッカーポップアップを表示
@@ -308,15 +349,23 @@
         if (tr.dataset.heatCopyHandled) return;
         const nameEl = tr.querySelector('.ind-name');
         const countEl = tr.querySelector('.ind-count');
+        const thEl = tr.querySelector('th.ind');
         if (!nameEl) return;
         tr.dataset.heatCopyHandled = '1';
+
+        const industryEnName = thEl ? thEl.getAttribute('title') : nameEl.textContent.trim();
 
         [nameEl, countEl].filter(Boolean).forEach(el => {
           makeClickable(el);
           el.addEventListener('click', function(e) {
             e.stopPropagation();
-            const name = nameEl.textContent.trim();
-            showTickerPopup(getTickersByIndustry(name), el, name);
+            const name = industryEnName || nameEl.textContent.trim();
+            const dispName = nameEl.textContent.trim();
+            const { tickers, fromUniverse } = getTickersForHeatmap(name);
+            const label = fromUniverse
+              ? `${dispName}（全${tickers.length}銘柄・RS順）`
+              : `${dispName}（${tickers.length}銘柄）`;
+            showTickerPopup(tickers, el, label);
           });
         });
       });
