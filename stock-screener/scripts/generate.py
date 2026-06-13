@@ -798,10 +798,18 @@ def build_insights(df: pd.DataFrame, ind_rs_today: dict) -> dict:
     for r in (ind_rs_today.get("industry_rs") or [])[:5]:
         top_industries.append({"name": r["industry"], "rank": r["rank"]})
 
-    # 集中Industry（3銘柄以上）
+    # 集中Industry（3銘柄以上）※ETF・Shell Companies等を除外
+    EXCLUDE_INDUSTRIES = {
+        "Exchange Traded Fund", "ETF",
+        "Shell Companies", "シェルカンパニー",
+        "Closed-End Fund - Debt", "Closed-End Fund - Equity", "Closed-End Fund - Foreign",
+    }
     concentrated = []
     if "Industry" in df.columns:
-        ind_counts = df[df["Industry"].fillna("") != ""]["Industry"].value_counts()
+        ind_counts = df[
+            (df["Industry"].fillna("") != "") &
+            (~df["Industry"].isin(EXCLUDE_INDUSTRIES))
+        ]["Industry"].value_counts()
         for ind, cnt in ind_counts.items():
             if cnt >= 3:
                 concentrated.append([ind, int(cnt)])
@@ -822,10 +830,10 @@ def build_insights(df: pd.DataFrame, ind_rs_today: dict) -> dict:
                     irs_int = None
                 if rs >= 85 and irs_int and irs_int > total_ind * 0.6 and ind:
                     divergent.append({
-                        "ticker":      row.get("Ticker", ""),
-                        "rs":          int(rs),
-                        "industry":    ind,
-                        "industry_rs": irs_int,
+                        "ticker":   row.get("Ticker", ""),
+                        "rs":       int(rs),
+                        "industry": ind,
+                        "ind_rank": irs_int,
                     })
 
     return {
@@ -915,10 +923,12 @@ def main():
         t   = row.get("Ticker")
         rs  = row.get("RS Rating")
         irs = row.get("Industry RS")
+        ind = row.get("Industry", "") or ""
         if t:
             universe_tickers[str(t)] = [
                 int(rs)  if pd.notna(rs)  else None,
                 int(irs) if pd.notna(irs) else None,
+                ind,  # Industry名を3番目に追加
             ]
 
     data_out = {
