@@ -376,6 +376,35 @@
     if (insightsEl) new MutationObserver(addCopyHandlers).observe(insightsEl, { childList: true, subtree: true });
     if (heatmapEl)  new MutationObserver(addCopyHandlers).observe(heatmapEl,  { childList: true, subtree: true });
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 「生成:」表示にドイツ時間を追加併記
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    function addGermanTime() {
+      const el = document.getElementById('generated-at');
+      if (!el || el.dataset.deTimeAdded) return;
+      const text = el.textContent || '';
+      const m = text.match(/生成:\s*([\d\-T:.+Z]+)/);
+      if (!m) return;
+      const dt = new Date(m[1]);
+      if (isNaN(dt.getTime())) return;
+
+      const deStr = dt.toLocaleString('ja-JP', {
+        timeZone: 'Europe/Berlin',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      });
+
+      el.textContent = text + `（独: ${deStr}）`;
+      el.dataset.deTimeAdded = '1';
+    }
+
+    new MutationObserver(addGermanTime).observe(
+      document.getElementById('generated-at'),
+      { childList: true, subtree: true, characterData: true }
+    );
+    addGermanTime();
+
   })();
   </script>
 </body>
