@@ -16,8 +16,8 @@ DATA_JSON     = OUTPUT_DIR / "data.json"
 UNIVERSE_JSON = OUTPUT_DIR / "universe.json"
 
 SCREENING_SUMMARY = "前日比≥+5% | 株価$0.75〜300 | 平均出来高≥50万株 | 売買代金≥$1M | 出来高≥平均(RelVol≥1) | 銘柄RS≥60 | 52W安値≥+30%"
-KEEP_DAYS  = 14
-TREND_DAYS = 28
+KEEP_DAYS  = 130  # 約半年（営業日）
+TREND_DAYS = 130  # 約半年（営業日）
 HV_MONTHS  = 3
 MAX_SECONDS = 300 * 60
 
@@ -979,7 +979,7 @@ def main():
     insights = build_insights(df_screen, ind_rs_today)
     days = [d for d in existing.get("days", []) if d["date"] != today]
     days.insert(0, df_to_day(df_screen, today, insights))
-    days = days[:KEEP_DAYS]
+    days = days[:KEEP_DAYS]  # 半年（約130営業日）保持
 
     trends = [t for t in existing.get("industry_trend", []) if t["date"] != today]
     if ind_rs_today.get("industry_rs"):
