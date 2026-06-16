@@ -21,7 +21,7 @@ jobs:
           python-version: "3.11"
 
       - name: ライブラリをインストール
-        run: pip install yfinance pandas numpy requests beautifulsoup4
+        run: pip install yfinance pandas numpy requests
 
       - name: データ生成スクリプトを実行
         run: python stock-screener/scripts/generate.py
@@ -30,9 +30,6 @@ jobs:
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git stash
-          git pull --rebase
-          git stash pop
           git add stock-screener/docs/data.json stock-screener/docs/universe.json
           git diff --staged --quiet || git commit -m "📊 Daily update: $(date -u '+%Y-%m-%d')"
           git push
