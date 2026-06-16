@@ -14,9 +14,6 @@ jobs:
     steps:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
 
       - name: Python をセットアップ
         uses: actions/setup-python@v5
@@ -33,7 +30,6 @@ jobs:
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase=false -s ours origin main || true
           git add stock-screener/docs/data.json stock-screener/docs/universe.json
           git diff --staged --quiet || git commit -m "📊 Daily update: $(date -u '+%Y-%m-%d')"
           git push
