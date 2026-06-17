@@ -2,8 +2,9 @@ name: Daily Stock Screener Update
 
 on:
   schedule:
-- cron: "37 21 * * 1-5"
+    - cron: "37 21 * * 1-5"
   workflow_dispatch:
+
 jobs:
   generate:
     runs-on: ubuntu-latest
