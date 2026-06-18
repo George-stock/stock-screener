@@ -1000,12 +1000,17 @@ def main():
         rs  = row.get("RS Rating")
         irs = row.get("Industry RS")
         ind = row.get("Industry", "") or ""
+        # df_allのIndustryが空の場合はindustry_mapから補完
+        if not ind and t in industry_map:
+            ind = industry_map[t] or ""
         if t:
             universe_tickers[str(t)] = [
                 int(rs)  if pd.notna(rs)  else None,
                 int(irs) if pd.notna(irs) else None,
                 ind,  # Industry名を3番目に追加
             ]
+    with_ind = sum(1 for v in universe_tickers.values() if v[2])
+    print(f"universe.json: {len(universe_tickers)}銘柄 (Industry付き: {with_ind})")
 
     data_out = {
         "generated_at":      now,
