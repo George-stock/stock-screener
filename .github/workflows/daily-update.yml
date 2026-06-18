@@ -2,7 +2,7 @@ name: Daily Stock Screener Update
 
 on:
   schedule:
-    - cron: "25 13 * * 1-5"
+    - cron: "06 13 * * 1-5"
   workflow_dispatch:
 
 jobs:
