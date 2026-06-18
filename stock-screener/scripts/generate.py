@@ -203,15 +203,19 @@ def load_tickers(industry_cache: dict) -> list[dict]:
 # RS Rating 計算
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def calc_rs_raw(prices: pd.Series) -> float:
+    """IBDスタイルRS Rating計算式：
+    現在価格を基準にした3/6/9/12ヶ月の累積リターンを加重平均。
+    perf1=直近3ヶ月, perf2=直近6ヶ月, perf3=直近9ヶ月, perf4=直近12ヶ月（いずれも現在価格起点）"""
     p = prices.dropna()
     if len(p) < 253:
         return float("nan")
     try:
-        q1 = p.iloc[-1]   / p.iloc[-64]  - 1
-        q2 = p.iloc[-64]  / p.iloc[-127] - 1
-        q3 = p.iloc[-127] / p.iloc[-190] - 1
-        q4 = p.iloc[-190] / p.iloc[-253] - 1
-        return 0.4 * q1 + 0.2 * q2 + 0.2 * q3 + 0.2 * q4
+        current = p.iloc[-1]
+        perf1 = current / p.iloc[-64]  - 1   # 3ヶ月
+        perf2 = current / p.iloc[-127] - 1   # 6ヶ月
+        perf3 = current / p.iloc[-190] - 1   # 9ヶ月
+        perf4 = current / p.iloc[-253] - 1   # 12ヶ月
+        return 0.4 * perf1 + 0.2 * perf2 + 0.2 * perf3 + 0.2 * perf4
     except Exception:
         return float("nan")
 
@@ -969,7 +973,9 @@ def main():
     df_screen["EPS加速"] = df_screen["Ticker"].map(
         lambda t: "▲加速" if eps_map.get(t, {}).get("eps_accel") == "Y" else "—"
     )
-    df_screen["売上加速"] = "—"  # 本家も未実装
+    df_screen["売上加速"] = df_screen["Ticker"].map(
+        lambda t: "▲加速" if eps_map.get(t, {}).get("rev_accel") == "Y" else "—"
+    )
 
     ind_rs_today = build_industry_rs(df_all, today)
     hvc_data     = build_hvc(tickers_screen, industry_map)
