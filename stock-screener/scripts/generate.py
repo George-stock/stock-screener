@@ -765,8 +765,10 @@ def build_industry_rs(df: pd.DataFrame, today: str) -> dict:
     ind = (
         valid.groupby("Industry")
         .agg(rs=("RS Rating","mean"), count=("RS Rating","count"), sector=("Sector","first"))
-        .reset_index().sort_values("rs", ascending=False).reset_index(drop=True)
+        .reset_index()
     )
+    # 5銘柄未満の業種はランキングから除外
+    ind = ind[ind["count"] >= 5].sort_values("rs", ascending=False).reset_index(drop=True)
     total = len(ind)
     return {
         "date": today,
