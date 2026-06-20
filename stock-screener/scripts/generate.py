@@ -283,6 +283,47 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
 
     print(f"  → {len(closes_all)} 銘柄取得完了 [{elapsed():.0f}s]")
 
+    # 253日未満（RS計算に使えない）銘柄をリトライで個別再取得
+    short_tickers = [t for t, p in closes_all.items() if len(p.dropna()) < 253]
+    if short_tickers and time_ok():
+        print(f"  データ不足{len(short_tickers)}銘柄をリトライ中...")
+        retry_batch_size = 100
+        recovered = 0
+        for i in range(0, len(short_tickers), retry_batch_size):
+            if not time_ok():
+                print(f"  ⚠️ タイムアウト接近、リトライ中断")
+                break
+            batch = short_tickers[i:i+retry_batch_size]
+            try:
+                raw = yf.download(batch, period="2y", auto_adjust=True,
+                                  progress=False, threads=True, group_by="ticker")
+                if raw.empty:
+                    continue
+                if isinstance(raw.columns, pd.MultiIndex):
+                    close = raw.xs("Close", axis=1, level=1)
+                    high  = raw.xs("High",  axis=1, level=1)
+                    low   = raw.xs("Low",   axis=1, level=1)
+                    open_ = raw.xs("Open",  axis=1, level=1)
+                else:
+                    close = raw[["Close"]] if "Close" in raw else pd.DataFrame()
+                    high  = raw[["High"]]  if "High"  in raw else pd.DataFrame()
+                    low   = raw[["Low"]]   if "Low"   in raw else pd.DataFrame()
+                    open_ = raw[["Open"]]  if "Open"  in raw else pd.DataFrame()
+                for t in batch:
+                    if t in close.columns:
+                        s = close[t].dropna()
+                        if len(s) > len(closes_all.get(t, pd.Series(dtype=float))):
+                            closes_all[t] = s
+                            if t in high.columns:  highs_all[t] = high[t].dropna()
+                            if t in low.columns:   lows_all[t]  = low[t].dropna()
+                            if t in open_.columns: opens_all[t] = open_[t].dropna()
+                            if len(s) >= 253:
+                                recovered += 1
+            except Exception as e:
+                print(f"    リトライエラー: {e}")
+            time.sleep(2)
+        print(f"  → リトライで{recovered}銘柄が253日分のデータを回復")
+
     print("RS Rating 計算中...")
     rs_raws    = {t: calc_rs_raw(p) for t, p in closes_all.items()}
     rs_series  = pd.Series(rs_raws)
