@@ -279,7 +279,7 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
                         if t in open_.columns: opens_all[t] = open_[t].dropna()
         except Exception as e:
             print(f"    エラー: {e}")
-        time.sleep(2)
+        time.sleep(5)
 
     print(f"  → {len(closes_all)} 銘柄取得完了 [{elapsed():.0f}s]")
 
@@ -287,7 +287,7 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
     short_tickers = [t for t, p in closes_all.items() if len(p.dropna()) < 253]
     if short_tickers and time_ok():
         print(f"  データ不足{len(short_tickers)}銘柄をリトライ中...")
-        retry_batch_size = 100
+        retry_batch_size = 50
         recovered = 0
         for i in range(0, len(short_tickers), retry_batch_size):
             if not time_ok():
@@ -321,7 +321,7 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
                                 recovered += 1
             except Exception as e:
                 print(f"    リトライエラー: {e}")
-            time.sleep(2)
+            time.sleep(8)
         print(f"  → リトライで{recovered}銘柄が253日分のデータを回復")
 
     print("RS Rating 計算中...")
@@ -522,6 +522,15 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
 
     # Industry RS計算（この時点での暫定値）
     _recalc_industry_rs(df)
+
+    # 実際の最終取引日（価格データの最新日）をattrsに保存
+    # GitHub Actionsの実行サーバー時刻(today())は土日や実行タイミングでズレるため、
+    # 必ず取得できた価格データの最終日を「その日のスクリーニング基準日」とする
+    last_dates = [p.index[-1] for p in closes_all.values() if len(p) > 0]
+    if last_dates:
+        latest = max(last_dates)
+        df.attrs["last_trading_date"] = pd.Timestamp(latest).date().isoformat()
+
     return df
 
 
@@ -625,7 +634,7 @@ def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.Data
     # ※価格データ一括取得直後はRate Limitになるため、少し待機してから実行
     all_tickers = df_screen["Ticker"].tolist()
     if all_tickers and time_ok():
-        wait_sec = 60
+        wait_sec = 90
         print(f"  Rate Limit回避のため{wait_sec}秒待機...")
         time.sleep(wait_sec)
 
@@ -643,12 +652,12 @@ def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.Data
                         break
                 except Exception as e:
                     if attempt == 0:
-                        time.sleep(5)  # Rate Limit時は長めに待ってリトライ
+                        time.sleep(10)  # Rate Limit時は長めに待ってリトライ
                     else:
                         print(f"    ⚠️ {ticker}: {e}")
 
             if not info:
-                time.sleep(2)
+                time.sleep(4)
                 continue
 
             industry = info.get("industry", "") or ""
@@ -690,7 +699,7 @@ def enrich_with_finviz(df_screen: pd.DataFrame, df_all: pd.DataFrame) -> pd.Data
                     df_screen.loc[mask, col] = val
 
             ok_count += 1
-            time.sleep(2)
+            time.sleep(4)
 
         print(f"    → {ok_count}/{len(all_tickers)}銘柄 最新化完了 [{elapsed():.0f}s]")
 
@@ -1002,6 +1011,13 @@ def main():
     if df_all.empty:
         print("❌ データ取得失敗")
         sys.exit(1)
+
+    # 実際の価格データの最終取引日を「今日」とする（サーバー時刻のズレを防止）
+    actual_date = df_all.attrs.get("last_trading_date")
+    if actual_date:
+        if actual_date != today:
+            print(f"  📅 日付補正: サーバー日付{today} → 実際の最終取引日{actual_date}")
+        today = actual_date
 
     df_screen = apply_filters(df_all)
     print(f"スクリーニング通過: {len(df_screen)} 銘柄 [{elapsed():.0f}s]")
