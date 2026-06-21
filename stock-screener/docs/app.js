@@ -728,10 +728,17 @@ function initWeeklySelect(days) {
       const dates = idxs.map((i) => days[i].date).sort();
       const startStr = dates[0].slice(5).replace("-", "/");
       const endStr = dates[dates.length - 1].slice(5).replace("-", "/");
-      const totalRaw = idxs.reduce((s, i) => s + (days[i].count || 0), 0);
-      const label = dates.length === 1
-        ? `${startStr}（1日・${totalRaw}銘柄延べ）`
-        : `${startStr}〜${endStr}（${dates.length}日・${totalRaw}銘柄延べ）`;
+      // 重複排除後のユニーク銘柄数をラベルに表示（本家準拠）
+      const seenSet = new Set();
+      for (const i of idxs) {
+        const day = days[i];
+        const tIdx = day.columns.indexOf("Ticker");
+        if (tIdx === -1) continue;
+        for (const row of day.rows) {
+          if (row[tIdx]) seenSet.add(row[tIdx]);
+        }
+      }
+      const label = `${startStr}〜${endStr}（${dates.length}日・${seenSet.size}銘柄）`;
       sel.appendChild(el("option", { value: wk }, label));
     });
 
