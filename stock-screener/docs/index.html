@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>US Stock Screener</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1 class="site-title">
+        <span class="title-emoji">📈</span>
+        <span class="title-main">US Stock Screener</span>
+        
+      </h1>
+      <div class="meta">
+        <label class="date-picker">
+          日付
+          <select id="day-select"></select>
+        </label>
+      </div>
+    </div>
+    <p id="screening-summary" class="summary"></p>
+    <p id="generated-at" class="generated"></p>
+  </header>
+
+  <main>
+    <section id="insights" class="cards" aria-label="示唆"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>抽出リスト<span class="head-note" id="screen-meta"></span></h2>
+        <div class="controls">
+          <input id="filter" type="search" placeholder="ティッカー/銘柄/Industryで絞り込み" autocomplete="off">
+          <label class="rs-min">RS≥ <input id="rs-min" type="number" min="0" max="99" step="1" placeholder="0"></label>
+          <details class="col-menu">
+            <summary>列</summary>
+            <div id="col-checkboxes" class="col-checkboxes"></div>
+          </details>
+          <button id="copy-tv" type="button" title="TradingViewウォッチリスト取込用テキストをコピー">TVリストをコピー</button>
+          <a id="finviz-maps" class="btn-link" href="#" target="_blank" rel="noopener">finviz Maps</a>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="screen-table">
+          <thead><tr id="screen-head"></tr></thead>
+          <tbody id="screen-body"></tbody>
+        </table>
+      </div>
+      <p id="table-empty" class="empty" hidden>該当なし</p>
+    </section>
+
+    <section class="panel" id="weekly-panel">
+      <div class="panel-head">
+        <h2>週まとめ → TVリスト<span class="head-note">選んだ週（月〜金）に1回でも抽出された銘柄を重複なくまとめ、Industry RSグレード別ブロック＋銘柄RS降順でTradingView取込形式に変換</span></h2>
+        <div class="controls">
+          <label class="date-picker">
+            週
+            <select id="week-select"></select>
+          </label>
+          <button id="weekly-copy" type="button" disabled>この週をコピー</button>
+        </div>
+      </div>
+      <p id="weekly-status" class="mylist-status"></p>
+      <div class="mylist-io">
+        <label class="mylist-field" style="grid-column: 1 / -1;">
+          <span class="mylist-label">出力（TradingView ウォッチリスト取込用テキスト）</span>
+          <textarea id="weekly-output" rows="8" readonly placeholder="週を選択すると変換結果が表示されます" spellcheck="false"></textarea>
+        </label>
+      </div>
+    </section>
+
+    <section class="panel" id="mylist-panel">
+      <div class="panel-head">
+        <h2>マイリスト → TVリスト<span class="head-note">自作のティッカーを貼り付け、Industry RSグレード別にブロック分け＋銘柄RS降順でTradingView取込形式に変換</span></h2>
+      </div>
+      <div class="mylist-body">
+        <div class="mylist-io">
+          <label class="mylist-field">
+            <span class="mylist-label">入力（改行 / カンマ / スペース区切り。<code>NASDAQ:</code> 等の接頭辞は自動除去）</span>
+            <textarea id="mylist-input" rows="8" placeholder="AAPL, MSFT&#10;NVDA&#10;NASDAQ:AMD" autocomplete="off" spellcheck="false"></textarea>
+          </label>
+          <label class="mylist-field">
+            <span class="mylist-label">出力（TradingView ウォッチリスト取込用テキスト）</span>
+            <textarea id="mylist-output" rows="8" readonly placeholder="ここに変換結果が表示されます" spellcheck="false"></textarea>
+          </label>
+        </div>
+        <div class="mylist-controls">
+          <button id="mylist-run" type="button">変換</button>
+          <button id="mylist-copy" type="button" disabled>TVリストをコピー</button>
+          <span id="mylist-status" class="mylist-status"></span>
+        </div>
+        <p id="mylist-unmatched" class="mylist-unmatched" hidden></p>
+      </div>
+    </section>
+
+    <section class="panel" id="trend-panel">
+      <div class="panel-head">
+        <h2>Industry RS<span class="head-note">（ランキング・全期間の推移）</span></h2>
+        <div class="controls">
+          <input id="trend-filter" type="search" placeholder="Industry/Sectorで絞り込み" autocomplete="off">
+          <label class="rs-min">単位 <select id="trend-gran">
+            <option value="day">日次</option>
+            <option value="week" selected>週次</option>
+          </select></label>
+          <label class="rs-min">表示 <select id="trend-mode">
+            <option value="rs">RS値</option>
+            <option value="rank" selected>順位</option>
+          </select></label>
+          <label class="rs-min">件数 <select id="trend-limit">
+            <option value="30">上位30</option>
+            <option value="50">上位50</option>
+            <option value="0" selected>全部</option>
+          </select></label>
+        </div>
+      </div>
+      <div id="trend-movers" class="movers"></div>
+      <div class="table-wrap heatmap-wrap">
+        <table id="heatmap" class="heatmap">
+          <thead id="heatmap-head"></thead>
+          <tbody id="heatmap-body"></tbody>
+        </table>
+      </div>
+      <p id="trend-empty" class="empty" hidden>Industry RSの時系列データが足りません（2日以上必要）。</p>
+    </section>
+
+    <section class="panel" id="hv-panel" hidden>
+      <div class="panel-head">
+        <h2>HVC銘柄 <span class="head-note">HVE / HV1（ギャップ≥10%・高値引け≥75% / 発生日終値から-10%超で除外）<span id="hv-meta"></span></span></h2>
+        <div class="controls">
+          <input id="hv-filter" type="search" placeholder="ティッカー/Industryで絞り込み" autocomplete="off">
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="hv-table">
+          <thead id="hv-head"></thead>
+          <tbody id="hv-body"></tbody>
+        </table>
+      </div>
+      <p id="hv-empty" class="empty" hidden>該当なし</p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>RS Rating / Industry RS は IBD近似（finviz_screener 算出）。市場データの正確性は保証されません。</span>
+  </footer>
+
+  <script src="app.js"></script>
+  <script>
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 業種名クリックでティッカー一覧を展開 + コピー機能
+  // 対象：① 集中Industry ② Top Industry ③ ヒートマップ業種行
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  (function() {
+
+    // 英語↔日本語変換
+    function getAltNames(industryName) {
+      const jaToEn = {};
+      if (typeof INDUSTRY_JA !== 'undefined') {
+        Object.entries(INDUSTRY_JA).forEach(([en, ja]) => { jaToEn[ja] = en; });
+      }
+      const names = new Set([industryName.toLowerCase().trim()]);
+      if (typeof INDUSTRY_JA !== 'undefined' && INDUSTRY_JA[industryName])
+        names.add(INDUSTRY_JA[industryName].toLowerCase().trim());
+      if (jaToEn[industryName])
+        names.add(jaToEn[industryName].toLowerCase().trim());
+      return names;
+    }
+
+    // 抽出リストから指定業種のティッカーを取得（スクリーニング通過銘柄）
+    function getTickersByIndustry(industryName) {
+      const headCells = document.querySelectorAll('#screen-head th');
+      let tickerIdx = -1, industryIdx = -1;
+      headCells.forEach((th, i) => {
+        const t = th.textContent.trim();
+        if (t === 'Ticker') tickerIdx = i;
+        if (t === 'Industry') industryIdx = i;
+      });
+      if (tickerIdx === -1 || industryIdx === -1) return [];
+
+      const searchNames = getAltNames(industryName);
+      const tickers = [];
+      document.querySelectorAll('#screen-body tr').forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (!cells[tickerIdx] || !cells[industryIdx]) return;
+        const ticker = cells[tickerIdx].textContent.trim();
+        const industry = cells[industryIdx].textContent.trim();
+        const jaToEn = {};
+        if (typeof INDUSTRY_JA !== 'undefined')
+          Object.entries(INDUSTRY_JA).forEach(([en, ja]) => { jaToEn[ja] = en; });
+        const indEn = jaToEn[industry] || industry;
+        const indJa2 = (typeof INDUSTRY_JA !== 'undefined' && INDUSTRY_JA[industry]) || industry;
+        if (searchNames.has(industry.toLowerCase().trim()) ||
+            searchNames.has(indEn.toLowerCase().trim()) ||
+            searchNames.has(indJa2.toLowerCase().trim())) {
+          tickers.push(ticker);
+        }
+      });
+      return tickers;
+    }
+
+    // universe.jsonから指定業種の全銘柄を取得
+    function getTickersByIndustryFromUniverse(industryName) {
+      if (!window._universeData) return null; // データ未ロード
+      const searchNames = getAltNames(industryName);
+      const jaToEn = {};
+      if (typeof INDUSTRY_JA !== 'undefined')
+        Object.entries(INDUSTRY_JA).forEach(([en, ja]) => { jaToEn[ja] = en; });
+
+      const tickers = [];
+      Object.entries(window._universeData).forEach(([ticker, val]) => {
+        if (!val || !val[2]) return;
+        const ind = val[2];
+        const indEn = jaToEn[ind] || ind;
+        const indJa2 = (typeof INDUSTRY_JA !== 'undefined' && INDUSTRY_JA[ind]) || ind;
+        if (searchNames.has(ind.toLowerCase().trim()) ||
+            searchNames.has(indEn.toLowerCase().trim()) ||
+            searchNames.has(indJa2.toLowerCase().trim())) {
+          tickers.push(ticker);
+        }
+      });
+      // RS順にソート
+      tickers.sort((a, b) => {
+        const rsA = window._universeData[a]?.[0] || 0;
+        const rsB = window._universeData[b]?.[0] || 0;
+        return rsB - rsA;
+      });
+      return tickers;
+    }
+
+    // universe.jsonを非同期ロード
+    fetch('universe.json').then(r => r.json()).then(data => {
+      window._universeData = data.tickers || {};
+    }).catch(() => {});
+
+    // ヒートマップ用：universe全体から取得、なければ抽出リストから
+    function getTickersForHeatmap(industryName) {
+      const fromUniverse = getTickersByIndustryFromUniverse(industryName);
+      if (fromUniverse !== null && fromUniverse.length > 0) return { tickers: fromUniverse, fromUniverse: true };
+      return { tickers: getTickersByIndustry(industryName), fromUniverse: false };
+    }
+
+    // ティッカーポップアップを表示
+    let currentPopup = null;
+
+    function showTickerPopup(tickers, anchorEl, industryName) {
+      // 既存のポップアップを閉じる
+      if (currentPopup) { currentPopup.remove(); currentPopup = null; }
+
+      const popup = document.createElement('div');
+      popup.style.cssText = `
+        position: absolute;
+        background: #1a1a2e;
+        border: 1px solid #444;
+        border-radius: 8px;
+        padding: 10px 12px;
+        z-index: 9999;
+        min-width: 200px;
+        max-width: 320px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        font-size: 13px;
+      `;
+
+      if (!tickers.length) {
+        popup.innerHTML = `<div style="color:#888">抽出リストに該当銘柄なし</div>`;
+      } else {
+        const tickerText = tickers.join(', ');
+        popup.innerHTML = `
+          <div style="color:#aaa;font-size:11px;margin-bottom:6px">${industryName}（${tickers.length}銘柄）</div>
+          <div style="color:#7eb8f7;letter-spacing:0.5px;line-height:1.8;word-break:break-all">${tickerText}</div>
+          <button id="popup-copy-btn" style="
+            margin-top:8px;
+            background:#2a5298;
+            color:#fff;
+            border:none;
+            border-radius:4px;
+            padding:4px 12px;
+            cursor:pointer;
+            font-size:12px;
+            width:100%;
+          ">コピー</button>
+        `;
+      }
+
+      // アンカーの位置にポップアップを配置
+      const rect = anchorEl.getBoundingClientRect();
+      const scrollY = window.scrollY || window.pageYOffset;
+      const scrollX = window.scrollX || window.pageXOffset;
+
+      popup.style.top = (rect.bottom + scrollY + 4) + 'px';
+      popup.style.left = Math.max(8, rect.left + scrollX) + 'px';
+
+      document.body.appendChild(popup);
+      currentPopup = popup;
+
+      // コピーボタン
+      const copyBtn = popup.querySelector('#popup-copy-btn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          navigator.clipboard.writeText(tickers.join(',')).then(() => {
+            copyBtn.textContent = '✅ コピー済';
+            copyBtn.style.background = '#1a6e3c';
+            setTimeout(() => {
+              copyBtn.textContent = 'コピー';
+              copyBtn.style.background = '#2a5298';
+            }, 2000);
+          }).catch(() => {
+            prompt('ティッカーをコピー:', tickers.join(','));
+          });
+        });
+      }
+
+      // 外側クリックで閉じる
+      setTimeout(() => {
+        document.addEventListener('click', function closePopup(e) {
+          if (!popup.contains(e.target)) {
+            popup.remove();
+            currentPopup = null;
+            document.removeEventListener('click', closePopup);
+          }
+        });
+      }, 100);
+    }
+
+    function makeClickable(el) {
+      el.style.cursor = 'pointer';
+      el.style.textDecoration = 'underline dotted';
+      el.title = 'タップでティッカー一覧を表示';
+    }
+
+    function addCopyHandlers() {
+      // ① 集中Industry（🔥）の銘柄数
+      document.querySelectorAll('#insights li').forEach(li => {
+        const vEl = li.querySelector('.v');
+        if (!vEl || vEl.dataset.copyHandled) return;
+        if (!/^\d+$/.test(vEl.textContent.trim())) return;
+        vEl.dataset.copyHandled = '1';
+        makeClickable(vEl);
+        vEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const indEl = li.querySelector('span:not(.v)');
+          if (!indEl) return;
+          const name = indEl.textContent.trim();
+          showTickerPopup(getTickersByIndustry(name), vEl, name);
+        });
+      });
+
+      // ② Top Industry（🏆）の順位をクリック
+      document.querySelectorAll('#insights li').forEach(li => {
+        if (li.dataset.topCopyHandled) return;
+        const vEl = li.querySelector('.v');
+        if (!vEl || !vEl.textContent.includes('位')) return;
+        li.dataset.topCopyHandled = '1';
+        makeClickable(vEl);
+        vEl.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const indEl = li.querySelector('span:not(.v)');
+          if (!indEl) return;
+          const name = indEl.textContent.trim();
+          showTickerPopup(getTickersByIndustry(name), vEl, name);
+        });
+      });
+
+      // ③ ヒートマップの業種名・銘柄数
+      document.querySelectorAll('#heatmap-body tr').forEach(tr => {
+        if (tr.dataset.heatCopyHandled) return;
+        const nameEl = tr.querySelector('.ind-name');
+        const countEl = tr.querySelector('.ind-count');
+        const thEl = tr.querySelector('th.ind');
+        if (!nameEl) return;
+        tr.dataset.heatCopyHandled = '1';
+
+        const industryEnName = thEl ? thEl.getAttribute('title') : nameEl.textContent.trim();
+
+        [nameEl, countEl].filter(Boolean).forEach(el => {
+          makeClickable(el);
+          el.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const name = industryEnName || nameEl.textContent.trim();
+            const dispName = nameEl.textContent.trim();
+            const { tickers, fromUniverse } = getTickersForHeatmap(name);
+            const label = fromUniverse
+              ? `${dispName}（全${tickers.length}銘柄・RS順）`
+              : `${dispName}（${tickers.length}銘柄）`;
+            showTickerPopup(tickers, el, label);
+          });
+        });
+      });
+    }
+
+    const insightsEl = document.getElementById('insights');
+    const heatmapEl = document.getElementById('heatmap-body');
+    if (insightsEl) new MutationObserver(addCopyHandlers).observe(insightsEl, { childList: true, subtree: true });
+    if (heatmapEl)  new MutationObserver(addCopyHandlers).observe(heatmapEl,  { childList: true, subtree: true });
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 「生成:」表示にドイツ時間を追加併記
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    function addGermanTime() {
+      const el = document.getElementById('generated-at');
+      if (!el || el.dataset.deTimeAdded) return;
+      const text = el.textContent || '';
+      const m = text.match(/生成:\s*([\d\-T:.+Z]+)/);
+      if (!m) return;
+      const dt = new Date(m[1]);
+      if (isNaN(dt.getTime())) return;
+
+      const deStr = dt.toLocaleString('ja-JP', {
+        timeZone: 'Europe/Berlin',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      });
+
+      el.textContent = text + `（独: ${deStr}）`;
+      el.dataset.deTimeAdded = '1';
+    }
+
+    new MutationObserver(addGermanTime).observe(
+      document.getElementById('generated-at'),
+      { childList: true, subtree: true, characterData: true }
+    );
+    addGermanTime();
+
+  })();
+  </script>
+</body>
+</html>
