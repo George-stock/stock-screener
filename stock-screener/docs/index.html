@@ -52,6 +52,26 @@
       <p id="table-empty" class="empty" hidden>該当なし</p>
     </section>
 
+    <section class="panel" id="weekly-panel">
+      <div class="panel-head">
+        <h2>週まとめ → TVリスト<span class="head-note">選んだ週（月〜金）に1回でも抽出された銘柄を重複なくまとめ、Industry RSグレード別ブロック＋銘柄RS降順でTradingView取込形式に変換</span></h2>
+        <div class="controls">
+          <label class="date-picker">
+            週
+            <select id="week-select"></select>
+          </label>
+          <button id="weekly-copy" type="button" disabled>この週をコピー</button>
+        </div>
+      </div>
+      <p id="weekly-status" class="mylist-status"></p>
+      <div class="mylist-io">
+        <label class="mylist-field" style="grid-column: 1 / -1;">
+          <span class="mylist-label">出力（TradingView ウォッチリスト取込用テキスト）</span>
+          <textarea id="weekly-output" rows="8" readonly placeholder="週を選択すると変換結果が表示されます" spellcheck="false"></textarea>
+        </label>
+      </div>
+    </section>
+
     <section class="panel" id="mylist-panel">
       <div class="panel-head">
         <h2>マイリスト → TVリスト<span class="head-note">自作のティッカーを貼り付け、Industry RSグレード別にブロック分け＋銘柄RS降順でTradingView取込形式に変換</span></h2>
