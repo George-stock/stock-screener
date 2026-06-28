@@ -991,6 +991,45 @@ def df_to_day(df: pd.DataFrame, today: str, insights: dict = None) -> dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # メイン
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# センチメントデータ取得
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def fetch_sentiment() -> dict:
+    """VIX, VIX3M, VTS, PCRをサーバーサイドで取得してdictで返す。"""
+    result = {"vix": None, "vix3m": None, "vts": None, "pcr": None, "generated_at": None}
+    try:
+        # VIX / VIX3M → yfinance 個別取得（バージョン差異を回避）
+        def get_last_close(ticker):
+            d = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
+            if d.empty: return None
+            col = d["Close"] if "Close" in d.columns else d.iloc[:, 0]
+            return round(float(col.dropna().iloc[-1]), 2)
+        result["vix"]  = get_last_close("^VIX")
+        result["vix3m"] = get_last_close("^VIX3M")
+        if result["vix"] and result["vix3m"] and result["vix3m"] > 0:
+            result["vts"] = round(result["vix"] / result["vix3m"], 3)
+        print(f"  VIX={result['vix']}  VIX3M={result['vix3m']}  VTS={result['vts']}")
+    except Exception as e:
+        print(f"  ⚠️ VIX取得エラー: {e}")
+
+    try:
+        # PCR → CBOE公式CSV（PCVA = Total Put/Call Ratio）
+        pcr_url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCVA_History.csv"
+        resp = requests.get(pcr_url, timeout=15)
+        if resp.status_code == 200:
+            lines = [l for l in resp.text.strip().splitlines() if l and not l.startswith("DATE")]
+            if lines:
+                last = lines[-1].split(",")
+                if len(last) >= 2:
+                    result["pcr"] = round(float(last[1]), 2)
+        print(f"  PCR={result['pcr']}")
+    except Exception as e:
+        print(f"  ⚠️ PCR取得エラー: {e}")
+
+    result["generated_at"] = datetime.datetime.now().astimezone().isoformat()
+    return result
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
     today = datetime.date.today().isoformat()
     now   = datetime.datetime.now().astimezone().isoformat()
@@ -1037,7 +1076,10 @@ def main():
     )
 
     ind_rs_today = build_industry_rs(df_all, today)
-    hvc_data     = build_hvc(tickers_screen, industry_map)
+    # HVCはRS Rating>=60の全銘柄を対象（スクリーニング通過銘柄のみだと少なすぎる）
+    tickers_hvc = df_all[df_all["RS Rating"] >= 60]["Ticker"].tolist()
+    print(f"HVC対象: {len(tickers_hvc)}銘柄（RS≥60全銘柄）")
+    hvc_data     = build_hvc(tickers_hvc, industry_map)
     hvc_set      = {r["ticker"] for r in hvc_data["rows"]}
     df_screen["HV"] = df_screen["Ticker"].map(lambda t: "HV1" if t in hvc_set else "")
 
@@ -1081,6 +1123,7 @@ def main():
                      "n_rev_judged": 0, "n_rev_ready": 0},
             "map": eps_map,
         },
+        "sentiment":         fetch_sentiment(),
     }
     with open(DATA_JSON, "w", encoding="utf-8") as f:
         json.dump(data_out, f, ensure_ascii=False, separators=(",", ":"))
