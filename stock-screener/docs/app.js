@@ -1291,148 +1291,108 @@ function getSignal(score) {
   return                  {label:"見送り",     color:"#6b7280"};
 }
 
-function vixLabel(v) {
-  if (v == null) return "—";
-  if (v>=35) return "恐怖";
-  if (v>=25) return "注意";
-  return "通常";
-}
-function pcrLabel(p) {
-  if (p == null) return "—";
-  if (p>=1.0) return "弱気";
-  if (p>=0.85) return "中立";
-  return "強気";
-}
-function aaiiLabel(a) {
-  if (a == null) return "—";
-  if (a>=45) return "強弱気";
-  if (a>=35) return "弱気";
-  return "平均";
-}
-function vtsLabel(r) {
-  if (r == null) return "—";
-  if (r>=1.1) return "警戒";
-  if (r>=1.0) return "やや高";
-  return "通常";
-}
-
-async function fetchVix() {
-  try {
-    const [r1, r2] = await Promise.all([
-      fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d"),
-      fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX3M?interval=1d&range=1d"),
-    ]);
-    const d1 = await r1.json();
-    const d2 = await r2.json();
-    const vix  = d1?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
-    const vix3m= d2?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
-    const vts  = (vix != null && vix3m != null && vix3m > 0) ? +(vix / vix3m).toFixed(3) : null;
-    return { vix, vix3m, vts };
-  } catch {
-    return { vix: null, vix3m: null, vts: null };
-  }
-}
+function vixLabel(v)  { if(v==null)return"—"; if(v>=35)return"恐怖"; if(v>=25)return"注意"; return"通常"; }
+function pcrLabel(p)  { if(p==null)return"—"; if(p>=1.0)return"弱気"; if(p>=0.85)return"中立"; return"強気"; }
+function aaiiLabel(a) { if(a==null)return"—"; if(a>=45)return"強弱気"; if(a>=35)return"弱気"; return"平均"; }
+function vtsLabel(r)  { if(r==null)return"—"; if(r>=1.1)return"警戒"; if(r>=1.0)return"やや高"; return"通常"; }
 
 function buildSentimentCard() {
   const card = el("div", { class: "card", id: "sent-card", style: "min-width:240px" });
-  card.appendChild(el("h3", {}, "📊 NQ1! センチメント"));
+  card.appendChild(el("h3", {}, "📊 NQ1! センチメント ",
+    el("a", {
+      href: "sentiment-db.html",
+      target: "_blank",
+      style: "font-size:10px;color:var(--accent);font-weight:400;letter-spacing:0"
+    }, "結果DB↗")
+  ));
 
-  const body = el("div", { style: "font-size:11px; color:var(--text-dim);" }, "読み込み中...");
-  card.appendChild(body);
+  // data.jsonからセンチメント取得（generate.pyで毎日更新）
+  const sent = state.data.sentiment || {};
+  const vix  = sent.vix  ?? null;
+  const vts  = sent.vts  ?? null;
+  const pcr  = sent.pcr  ?? null;
 
-  // 非同期でVIX取得後に描画
+  // AAII手動入力部分
   const manual = sentLoad();
-  fetchVix().then(({ vix, vts }) => {
-    body.innerHTML = "";
+  const inputRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;" });
 
-    // 手動入力行
-    const inputRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;" });
+  const aaiiInput = document.createElement("input");
+  Object.assign(aaiiInput, {
+    type:"number", step:"0.1", min:"0", max:"100",
+    placeholder:"AAII弱気%", value: manual.aaii ?? "",
+  });
+  aaiiInput.style.cssText = "width:80px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 6px;font-size:11px;";
 
-    // PCR入力
-    const pcrInput = document.createElement("input");
-    Object.assign(pcrInput, { type:"number", step:"0.01", min:"0", max:"3",
-      placeholder:"PCR", value: manual.pcr ?? "",
-      title: "CBOE Put/Call Ratio (PCVA)" });
-    pcrInput.style.cssText = "width:58px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px;";
+  const aaiiLink = el("a", {
+    href: "https://www.aaii.com/sentimentsurvey",
+    target: "_blank",
+    style: "font-size:10px;color:var(--accent);white-space:nowrap;"
+  }, "AAII↗");
 
-    // AAII入力
-    const aaiiInput = document.createElement("input");
-    Object.assign(aaiiInput, { type:"number", step:"0.1", min:"0", max:"100",
-      placeholder:"AAII弱気%", value: manual.aaii ?? "",
-      title: "AAII弱気%（毎週木曜更新）" });
-    aaiiInput.style.cssText = "width:72px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px;";
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "保存";
+  saveBtn.style.cssText = "font-size:10px;padding:2px 6px;";
 
-    // 保存ボタン
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "保存";
-    saveBtn.style.cssText = "font-size:10px;padding:2px 6px;";
-    saveBtn.addEventListener("click", () => {
-      const pcr  = parseFloat(pcrInput.value)  || null;
-      const aaii = parseFloat(aaiiInput.value) || null;
-      sentSave({ pcr, aaii });
-      renderScores(vix, vts, pcr, aaii);
-    });
+  const scoresDiv = el("div", { id: "sent-scores" });
 
-    inputRow.append(
-      el("span", { style:"color:var(--text-dim)" }, "PCR:"), pcrInput,
-      el("span", { style:"color:var(--text-dim)" }, "AAII%:"), aaiiInput,
-      saveBtn
-    );
-    body.appendChild(inputRow);
-
-    const scoresDiv = el("div", { id: "sent-scores" });
-    body.appendChild(scoresDiv);
-
-    // 初期描画
-    const saved = sentLoad();
-    renderScores(vix, vts, saved.pcr ?? null, saved.aaii ?? null, scoresDiv);
-
-    function renderScores(vix, vts, pcr, aaii, target) {
-      const t = target || document.getElementById("sent-scores");
-      if (!t) return;
-      t.innerHTML = "";
-
-      const score = calcVixScore(vix) + calcPcrScore(pcr) + calcAaiiScore(aaii) + calcVtsScore(vts);
-      const maxScore = 13;
-      const sig = getSignal(score);
-
-      // 指標行
-      const metrics = [
-        { label:"VIX",     val: vix  != null ? vix.toFixed(1)  : "—", sub: vixLabel(vix) },
-        { label:"PCR",     val: pcr  != null ? pcr.toFixed(2)  : "—", sub: pcrLabel(pcr) },
-        { label:"AAII弱気",val: aaii != null ? aaii.toFixed(1)+"%" : "—", sub: aaiiLabel(aaii) },
-        { label:"VTS",     val: vts  != null ? vts.toFixed(2)  : "—", sub: vtsLabel(vts) },
-        { label:"SCORE",   val: `${score.toFixed(1)}/${maxScore}`, sub: sig.label, color: sig.color },
-      ];
-
-      const grid = el("div", { style: "display:grid;grid-template-columns:repeat(5,1fr);gap:2px 4px;margin-bottom:6px;" });
-      for (const m of metrics) {
-        const col = el("div", { style: "text-align:center;" });
-        col.appendChild(el("div", { style: "font-size:10px;color:var(--text-dim);" }, m.label));
-        col.appendChild(el("div", { style: `font-size:13px;font-weight:600;color:${m.color||"var(--text)"};font-variant-numeric:tabular-nums;` }, m.val));
-        col.appendChild(el("div", { style: `font-size:10px;color:${m.color||"var(--text-dim)"};` }, m.sub));
-        grid.appendChild(col);
-      }
-      t.appendChild(grid);
-
-      // スコアバー
-      const barWrap = el("div", { style: "background:var(--panel-2);border-radius:3px;height:6px;margin-bottom:5px;overflow:hidden;" });
-      const barFill = el("div", { style: `height:100%;width:${Math.min(100, score/maxScore*100).toFixed(1)}%;background:${sig.color};transition:width 0.4s;border-radius:3px;` });
-      barWrap.appendChild(barFill);
-      t.appendChild(barWrap);
-
-      // シグナルメッセージ
-      let msg = "";
-      if (score < 4.5) msg = "→ VIX25+ / PCR0.85+ / AAII35%+ を待つ";
-      else if (score < 6.5) msg = "→ 小さく打診、追加は慎重に";
-      else if (score < 8.5) msg = "→ 分割買い開始";
-      else if (score < 10) msg = "→ 積極買い";
-      else msg = "→ 全力買い！";
-      t.appendChild(el("div", { style: "font-size:10px;color:var(--text-dim);" }, msg));
-    }
+  saveBtn.addEventListener("click", () => {
+    const aaii = parseFloat(aaiiInput.value) || null;
+    sentSave({ aaii });
+    renderSentScores(scoresDiv, vix, vts, pcr, aaii);
   });
 
+  inputRow.append(
+    el("span", { style:"font-size:10px;color:var(--text-dim);" }, "AAII弱気%:"),
+    aaiiInput,
+    aaiiLink,
+    saveBtn
+  );
+
+  card.appendChild(inputRow);
+  card.appendChild(scoresDiv);
+
+  // 初期描画
+  renderSentScores(scoresDiv, vix, vts, pcr, manual.aaii ?? null);
+
   return card;
+}
+
+function renderSentScores(target, vix, vts, pcr, aaii) {
+  target.innerHTML = "";
+  const maxScore = 13;
+  const score = calcVixScore(vix) + calcPcrScore(pcr) + calcAaiiScore(aaii) + calcVtsScore(vts);
+  const sig = getSignal(score);
+
+  const metrics = [
+    { label:"VIX",      val: vix  != null ? vix.toFixed(1)      : "—", sub: vixLabel(vix)  },
+    { label:"PCR",      val: pcr  != null ? pcr.toFixed(2)      : "—", sub: pcrLabel(pcr)  },
+    { label:"AAII弱気", val: aaii != null ? aaii.toFixed(1)+"%"  : "—", sub: aaiiLabel(aaii)},
+    { label:"VTS",      val: vts  != null ? vts.toFixed(2)      : "—", sub: vtsLabel(vts)  },
+    { label:"SCORE",    val: `${score.toFixed(1)}/${maxScore}`,          sub: sig.label, color: sig.color },
+  ];
+
+  const grid = el("div", { style:"display:grid;grid-template-columns:repeat(5,1fr);gap:2px 4px;margin-bottom:6px;" });
+  for (const m of metrics) {
+    const col = el("div", { style:"text-align:center;" });
+    col.appendChild(el("div", { style:"font-size:10px;color:var(--text-dim);" }, m.label));
+    col.appendChild(el("div", { style:`font-size:13px;font-weight:600;color:${m.color||"var(--text)"};font-variant-numeric:tabular-nums;` }, m.val));
+    col.appendChild(el("div", { style:`font-size:10px;color:${m.color||"var(--text-dim)"};` }, m.sub));
+    grid.appendChild(col);
+  }
+  target.appendChild(grid);
+
+  // スコアバー
+  const barWrap = el("div", { style:"background:var(--panel-2);border-radius:3px;height:6px;margin-bottom:5px;overflow:hidden;" });
+  barWrap.appendChild(el("div", { style:`height:100%;width:${Math.min(100,score/maxScore*100).toFixed(1)}%;background:${sig.color};border-radius:3px;` }));
+  target.appendChild(barWrap);
+
+  // メッセージ
+  let msg = score < 4.5 ? "→ VIX25+ / PCR0.85+ / AAII35%+ を待つ"
+          : score < 6.5 ? "→ 小さく打診、追加は慎重に"
+          : score < 8.5 ? "→ 分割買い開始"
+          : score < 10  ? "→ 積極買い"
+          : "→ 全力買い！";
+  target.appendChild(el("div", { style:"font-size:10px;color:var(--text-dim);" }, msg));
 }
 
 init();
