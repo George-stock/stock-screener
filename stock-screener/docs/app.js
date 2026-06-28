@@ -333,6 +333,9 @@ function renderInsights() {
   concCard.appendChild((ins.concentrated && ins.concentrated.length) ? concList : el("div", { class: "sub" }, "—"));
   root.appendChild(concCard);
 
+  // センチメントカード（VIX自動取得 / PCR・AAII手動入力）
+  root.appendChild(buildSentimentCard());
+
   // 乖離銘柄
   const divCard = el("div", { class: "card" }, el("h3", {}, "💎 乖離（強い銘柄×弱いIndustry）"));
   const divList = el("ul");
@@ -710,48 +713,35 @@ function initWeeklySelect(days) {
   const sel = document.getElementById("week-select");
   if (!sel || !days || !days.length) return;
 
-  try {
-    // 週(月曜日キー)ごとに、その週に含まれる平日(月〜金)のdaysインデックスをまとめる
-    const weekMap = new Map(); // weekKey -> [dayIndex,...]
-    days.forEach((d, i) => {
-      const wk = isoWeekKey(d.date);
-      if (!weekMap.has(wk)) weekMap.set(wk, []);
-      weekMap.get(wk).push(i);
-    });
+  // 週(月曜日キー)ごとに、その週に含まれる平日(月〜金)のdaysインデックスをまとめる
+  const weekMap = new Map(); // weekKey -> [dayIndex,...]
+  days.forEach((d, i) => {
+    const wk = isoWeekKey(d.date);
+    if (!weekMap.has(wk)) weekMap.set(wk, []);
+    weekMap.get(wk).push(i);
+  });
 
-    // 新しい週が先頭に来るようにソート
-    const weekKeys = Array.from(weekMap.keys()).sort((a, b) => b.localeCompare(a));
+  // 新しい週が先頭に来るようにソート
+  const weekKeys = Array.from(weekMap.keys()).sort((a, b) => b.localeCompare(a));
 
-    sel.innerHTML = "";
-    weekKeys.forEach((wk) => {
-      const idxs = weekMap.get(wk);
-      const dates = idxs.map((i) => days[i].date).sort();
-      const startStr = dates[0].slice(5).replace("-", "/");
-      const endStr = dates[dates.length - 1].slice(5).replace("-", "/");
-      // 重複排除後のユニーク銘柄数をラベルに表示（本家準拠）
-      const seenSet = new Set();
-      for (const i of idxs) {
-        const day = days[i];
-        const tIdx = day.columns.indexOf("Ticker");
-        if (tIdx === -1) continue;
-        for (const row of day.rows) {
-          if (row[tIdx]) seenSet.add(row[tIdx]);
-        }
-      }
-      const label = `${startStr}〜${endStr}（${dates.length}日・${seenSet.size}銘柄）`;
-      sel.appendChild(el("option", { value: wk }, label));
-    });
+  sel.innerHTML = "";
+  weekKeys.forEach((wk) => {
+    const idxs = weekMap.get(wk);
+    const dates = idxs.map((i) => days[i].date).sort();
+    const startStr = dates[0].slice(5).replace("-", "/");
+    const endStr = dates[dates.length - 1].slice(5).replace("-", "/");
+    const totalRaw = idxs.reduce((s, i) => s + (days[i].count || 0), 0);
+    const label = dates.length === 1
+      ? `${startStr}（1日・${totalRaw}銘柄延べ）`
+      : `${startStr}〜${endStr}（${dates.length}日・${totalRaw}銘柄延べ）`;
+    sel.appendChild(el("option", { value: wk }, label));
+  });
 
-    state.weekMap = weekMap;
+  state.weekMap = weekMap;
 
-    if (weekKeys.length) {
-      sel.value = weekKeys[0];
-      renderWeekly(weekKeys[0]);
-    }
-  } catch (e) {
-    const status = document.getElementById("weekly-status");
-    if (status) status.textContent = "週まとめ初期化エラー: " + (e && e.message ? e.message : e);
-    console.error("initWeeklySelect error:", e);
+  if (weekKeys.length) {
+    sel.value = weekKeys[0];
+    renderWeekly(weekKeys[0]);
   }
 }
 
@@ -1274,6 +1264,175 @@ function sparklineSVG(ind, cols, mode) {
   const unit = useRank ? "順位" : "RS";
   svg.appendChild(svgEl("title", {}, `${indJa(ind.industry)}\n${unit} ${vals[0]} → ${vals[vals.length - 1]}`));
   return svg;
+}
+
+// ============================================================
+// センチメントパネル
+// ============================================================
+const SENT_KEY = "sentiment_manual_v1";
+
+function sentLoad() {
+  try { return JSON.parse(localStorage.getItem(SENT_KEY)) || {}; } catch { return {}; }
+}
+function sentSave(obj) {
+  try { localStorage.setItem(SENT_KEY, JSON.stringify(obj)); } catch {}
+}
+
+function calcVixScore(v)  { return v>=60?3:v>=45?2.5:v>=35?2:v>=25?1:0; }
+function calcPcrScore(p)  { return p>=1.5?3:p>=1.2?2.5:p>=1.0?1.5:p>=0.85?1:0; }
+function calcAaiiScore(a) { return a>=50?2:a>=45?1.5:a>=40?1:a>=35?0.5:0; }
+function calcVtsScore(r)  { return r>=1.1?2:r>=1.0?1.5:r>=0.95?0.5:0; }
+
+function getSignal(score) {
+  if (score>=10)  return {label:"超全力買い", color:"#ff3860"};
+  if (score>=8.5) return {label:"全力買い",   color:"#ffd600"};
+  if (score>=6.5) return {label:"買い開始",   color:"#00e5a0"};
+  if (score>=4.5) return {label:"打診のみ",   color:"#4d9fff"};
+  return                  {label:"見送り",     color:"#6b7280"};
+}
+
+function vixLabel(v) {
+  if (v == null) return "—";
+  if (v>=35) return "恐怖";
+  if (v>=25) return "注意";
+  return "通常";
+}
+function pcrLabel(p) {
+  if (p == null) return "—";
+  if (p>=1.0) return "弱気";
+  if (p>=0.85) return "中立";
+  return "強気";
+}
+function aaiiLabel(a) {
+  if (a == null) return "—";
+  if (a>=45) return "強弱気";
+  if (a>=35) return "弱気";
+  return "平均";
+}
+function vtsLabel(r) {
+  if (r == null) return "—";
+  if (r>=1.1) return "警戒";
+  if (r>=1.0) return "やや高";
+  return "通常";
+}
+
+async function fetchVix() {
+  try {
+    const [r1, r2] = await Promise.all([
+      fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=1d"),
+      fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX3M?interval=1d&range=1d"),
+    ]);
+    const d1 = await r1.json();
+    const d2 = await r2.json();
+    const vix  = d1?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+    const vix3m= d2?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+    const vts  = (vix != null && vix3m != null && vix3m > 0) ? +(vix / vix3m).toFixed(3) : null;
+    return { vix, vix3m, vts };
+  } catch {
+    return { vix: null, vix3m: null, vts: null };
+  }
+}
+
+function buildSentimentCard() {
+  const card = el("div", { class: "card", id: "sent-card", style: "min-width:240px" });
+  card.appendChild(el("h3", {}, "📊 NQ1! センチメント"));
+
+  const body = el("div", { style: "font-size:11px; color:var(--text-dim);" }, "読み込み中...");
+  card.appendChild(body);
+
+  // 非同期でVIX取得後に描画
+  const manual = sentLoad();
+  fetchVix().then(({ vix, vts }) => {
+    body.innerHTML = "";
+
+    // 手動入力行
+    const inputRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;" });
+
+    // PCR入力
+    const pcrInput = document.createElement("input");
+    Object.assign(pcrInput, { type:"number", step:"0.01", min:"0", max:"3",
+      placeholder:"PCR", value: manual.pcr ?? "",
+      title: "CBOE Put/Call Ratio (PCVA)" });
+    pcrInput.style.cssText = "width:58px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px;";
+
+    // AAII入力
+    const aaiiInput = document.createElement("input");
+    Object.assign(aaiiInput, { type:"number", step:"0.1", min:"0", max:"100",
+      placeholder:"AAII弱気%", value: manual.aaii ?? "",
+      title: "AAII弱気%（毎週木曜更新）" });
+    aaiiInput.style.cssText = "width:72px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 4px;font-size:11px;";
+
+    // 保存ボタン
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "保存";
+    saveBtn.style.cssText = "font-size:10px;padding:2px 6px;";
+    saveBtn.addEventListener("click", () => {
+      const pcr  = parseFloat(pcrInput.value)  || null;
+      const aaii = parseFloat(aaiiInput.value) || null;
+      sentSave({ pcr, aaii });
+      renderScores(vix, vts, pcr, aaii);
+    });
+
+    inputRow.append(
+      el("span", { style:"color:var(--text-dim)" }, "PCR:"), pcrInput,
+      el("span", { style:"color:var(--text-dim)" }, "AAII%:"), aaiiInput,
+      saveBtn
+    );
+    body.appendChild(inputRow);
+
+    const scoresDiv = el("div", { id: "sent-scores" });
+    body.appendChild(scoresDiv);
+
+    // 初期描画
+    const saved = sentLoad();
+    renderScores(vix, vts, saved.pcr ?? null, saved.aaii ?? null, scoresDiv);
+
+    function renderScores(vix, vts, pcr, aaii, target) {
+      const t = target || document.getElementById("sent-scores");
+      if (!t) return;
+      t.innerHTML = "";
+
+      const score = calcVixScore(vix) + calcPcrScore(pcr) + calcAaiiScore(aaii) + calcVtsScore(vts);
+      const maxScore = 13;
+      const sig = getSignal(score);
+
+      // 指標行
+      const metrics = [
+        { label:"VIX",     val: vix  != null ? vix.toFixed(1)  : "—", sub: vixLabel(vix) },
+        { label:"PCR",     val: pcr  != null ? pcr.toFixed(2)  : "—", sub: pcrLabel(pcr) },
+        { label:"AAII弱気",val: aaii != null ? aaii.toFixed(1)+"%" : "—", sub: aaiiLabel(aaii) },
+        { label:"VTS",     val: vts  != null ? vts.toFixed(2)  : "—", sub: vtsLabel(vts) },
+        { label:"SCORE",   val: `${score.toFixed(1)}/${maxScore}`, sub: sig.label, color: sig.color },
+      ];
+
+      const grid = el("div", { style: "display:grid;grid-template-columns:repeat(5,1fr);gap:2px 4px;margin-bottom:6px;" });
+      for (const m of metrics) {
+        const col = el("div", { style: "text-align:center;" });
+        col.appendChild(el("div", { style: "font-size:10px;color:var(--text-dim);" }, m.label));
+        col.appendChild(el("div", { style: `font-size:13px;font-weight:600;color:${m.color||"var(--text)"};font-variant-numeric:tabular-nums;` }, m.val));
+        col.appendChild(el("div", { style: `font-size:10px;color:${m.color||"var(--text-dim)"};` }, m.sub));
+        grid.appendChild(col);
+      }
+      t.appendChild(grid);
+
+      // スコアバー
+      const barWrap = el("div", { style: "background:var(--panel-2);border-radius:3px;height:6px;margin-bottom:5px;overflow:hidden;" });
+      const barFill = el("div", { style: `height:100%;width:${Math.min(100, score/maxScore*100).toFixed(1)}%;background:${sig.color};transition:width 0.4s;border-radius:3px;` });
+      barWrap.appendChild(barFill);
+      t.appendChild(barWrap);
+
+      // シグナルメッセージ
+      let msg = "";
+      if (score < 4.5) msg = "→ VIX25+ / PCR0.85+ / AAII35%+ を待つ";
+      else if (score < 6.5) msg = "→ 小さく打診、追加は慎重に";
+      else if (score < 8.5) msg = "→ 分割買い開始";
+      else if (score < 10) msg = "→ 積極買い";
+      else msg = "→ 全力買い！";
+      t.appendChild(el("div", { style: "font-size:10px;color:var(--text-dim);" }, msg));
+    }
+  });
+
+  return card;
 }
 
 init();
