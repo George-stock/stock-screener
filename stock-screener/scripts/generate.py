@@ -1,4 +1,4 @@
-"""
+　"""
 US Stock Screener - データ生成スクリプト
 本家kiri_traderに近いカラム構成で生成。
 """
@@ -238,7 +238,7 @@ def industry_rs_grade(rank: int, total: int) -> str:
 def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
     all_tickers = [t["symbol"] for t in ticker_info]
     info_map    = {t["symbol"]: t for t in ticker_info}
-    batch_size  = 500
+    batch_size  = 200  # 500→200に縮小してRate Limitを軽減
 
     print(f"価格データ取得中（{len(all_tickers)}銘柄）...")
     closes_all = {}
@@ -255,7 +255,7 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
         tb = (len(all_tickers) - 1) // batch_size + 1
         print(f"  バッチ {n}/{tb} ({len(batch)}銘柄)... [{elapsed():.0f}s]")
         try:
-            raw = yf.download(batch, period="14mo", auto_adjust=True,
+            raw = yf.download(batch, period="2y", auto_adjust=True,
                               progress=False, threads=True, group_by="ticker")
             if raw.empty:
                 continue
@@ -279,7 +279,7 @@ def fetch_prices_and_calc_rs(ticker_info: list[dict]) -> pd.DataFrame:
                         if t in open_.columns: opens_all[t] = open_[t].dropna()
         except Exception as e:
             print(f"    エラー: {e}")
-        time.sleep(5)
+        time.sleep(8)  # 5→8秒に延長
 
     print(f"  → {len(closes_all)} 銘柄取得完了 [{elapsed():.0f}s]")
 
@@ -997,13 +997,15 @@ def fetch_sentiment() -> dict:
     """VIX, VIX3M, VTS, PCRをサーバーサイドで取得してdictで返す。"""
     result = {"vix": None, "vix3m": None, "vts": None, "pcr": None, "generated_at": None}
     try:
-        # VIX / VIX3M → yfinance 個別取得（バージョン差異を回避）
+        # VIX / VIX3M → yfinance Ticker.history（MultiIndex問題を回避）
         def get_last_close(ticker):
-            d = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
-            if d.empty: return None
-            col = d["Close"] if "Close" in d.columns else d.iloc[:, 0]
-            return round(float(col.dropna().iloc[-1]), 2)
-        result["vix"]  = get_last_close("^VIX")
+            try:
+                hist = yf.Ticker(ticker).history(period="5d")
+                if hist.empty: return None
+                return round(float(hist["Close"].dropna().iloc[-1]), 2)
+            except Exception:
+                return None
+        result["vix"]   = get_last_close("^VIX")
         result["vix3m"] = get_last_close("^VIX3M")
         if result["vix"] and result["vix3m"] and result["vix3m"] > 0:
             result["vts"] = round(result["vix"] / result["vix3m"], 3)
