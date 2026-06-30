@@ -2,7 +2,7 @@ name: Daily Stock Screener Update
 
 on:
   schedule:
-    - cron: "0 21 * * 1-5"
+    - cron: "25 14 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -32,7 +32,9 @@ jobs:
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git stash
           git pull --rebase
+          git stash pop
           git add stock-screener/docs/data.json stock-screener/docs/universe.json
           git diff --staged --quiet || git commit -m "📊 Daily update: $(date -u '+%Y-%m-%d')"
           git push
