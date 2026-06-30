@@ -158,7 +158,7 @@ function svgEl(tag, attrs = {}, ...children) {
 async function init() {
   let resp;
   try {
-    resp = await fetch("data.json", { cache: "no-cache" });
+    resp = await fetch("data.json", { cache: "no-store" });
     if (!resp.ok) throw new Error(resp.status);
     state.data = await resp.json();
   } catch (e) {
@@ -575,7 +575,7 @@ let universeCache = null;  // {date, tickers:{TICKER:[rs,irs]}} / "error" / null
 async function ensureUniverse() {
   if (universeCache && universeCache !== "error") return universeCache;
   try {
-    const resp = await fetch("universe.json", { cache: "no-cache" });
+    const resp = await fetch("universe.json", { cache: "no-store" });
     if (!resp.ok) throw new Error(resp.status);
     universeCache = await resp.json();
   } catch (e) {
