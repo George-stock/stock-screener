@@ -1,4 +1,4 @@
-　"""
+"""
 US Stock Screener - データ生成スクリプト
 本家kiri_traderに近いカラム構成で生成。
 """
