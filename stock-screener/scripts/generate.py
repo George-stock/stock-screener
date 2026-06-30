@@ -879,7 +879,7 @@ def build_hvc(tickers: list[str], industry_map: dict) -> dict:
                 avg_v  = float(vols.iloc[-63:].mean())
                 rel_v  = float(vols.loc[max_idx]) / avg_v if avg_v > 0 else 0
                 latest = float(close_df[ticker].iloc[-1])
-                since  = (latest - close) / close * 100
+                since  = (latest - close) / close * 100 if close != 0 else None
                 rows.append({
                     "ticker":      ticker,
                     "industry":    industry_map.get(ticker, ""),
@@ -889,7 +889,7 @@ def build_hvc(tickers: list[str], industry_map: dict) -> dict:
                     "gap":         round(gap_, 2),
                     "close_range": round(rng, 1),
                     "relvol":      round(rel_v, 1),
-                    "since":       round(since, 2),
+                    "since":       round(since, 2) if since is not None else None,
                     "volume":      int(vols.loc[max_idx]),
                     "market_cap":  None,
                 })
@@ -986,6 +986,21 @@ def df_to_day(df: pd.DataFrame, today: str, insights: dict = None) -> dict:
     if insights:
         day["insights"] = insights
     return day
+
+
+def sanitize_for_json(obj):
+    """NaN/Infinity/-InfinityをNoneに再帰変換する。
+    JavaScriptのJSON.parse()はこれらのトークンを受け付けずSyntaxErrorになるため、
+    json.dump前に必ずこの関数を通して安全なJSONを保証する。"""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):  # obj != obj はNaN判定
+            return None
+        return obj
+    return obj
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1127,13 +1142,14 @@ def main():
         },
         "sentiment":         fetch_sentiment(),
     }
+    data_out = sanitize_for_json(data_out)
     with open(DATA_JSON, "w", encoding="utf-8") as f:
-        json.dump(data_out, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(data_out, f, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     print(f"✅ data.json 書き出し完了 [{elapsed():.0f}s]")
 
+    universe_out = sanitize_for_json({"date": today, "generated_at": now, "tickers": universe_tickers})
     with open(UNIVERSE_JSON, "w", encoding="utf-8") as f:
-        json.dump({"date": today, "generated_at": now, "tickers": universe_tickers},
-                  f, ensure_ascii=False, separators=(",", ":"))
+        json.dump(universe_out, f, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     print(f"✅ universe.json 書き出し完了")
     print(f"=== 完了: {len(df_screen)}銘柄 / {len(universe_tickers)}銘柄RS [{elapsed():.0f}s] ===")
 
