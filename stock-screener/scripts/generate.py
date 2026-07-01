@@ -1029,15 +1029,11 @@ def fetch_sentiment() -> dict:
         print(f"  ⚠️ VIX取得エラー: {e}")
 
     try:
-        # PCR → CBOE公式CSV（PCVA = Total Put/Call Ratio）
-        pcr_url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCVA_History.csv"
-        resp = requests.get(pcr_url, timeout=15)
-        if resp.status_code == 200:
-            lines = [l for l in resp.text.strip().splitlines() if l and not l.startswith("DATE")]
-            if lines:
-                last = lines[-1].split(",")
-                if len(last) >= 2:
-                    result["pcr"] = round(float(last[1]), 2)
+        # PCR → yfinance経由（^PCVA = CBOE Total Put/Call Ratio）
+        # CBOE公式CSVはGitHub ActionsのIPからBot検出でブロックされるためyfinanceを使用
+        pcr_hist = yf.Ticker("^PCVA").history(period="5d")
+        if not pcr_hist.empty:
+            result["pcr"] = round(float(pcr_hist["Close"].dropna().iloc[-1]), 2)
         print(f"  PCR={result['pcr']}")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
