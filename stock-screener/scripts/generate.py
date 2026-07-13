@@ -1029,12 +1029,22 @@ def fetch_sentiment() -> dict:
         print(f"  ⚠️ VIX取得エラー: {e}")
 
     try:
-        # PCR → yfinance経由（^PCVA = CBOE Total Put/Call Ratio）
+        # PCR → yfinance経由（複数ティッカーをフォールバックで試行）
         # CBOE公式CSVはGitHub ActionsのIPからBot検出でブロックされるためyfinanceを使用
-        pcr_hist = yf.Ticker("^PCVA").history(period="5d")
-        if not pcr_hist.empty:
-            result["pcr"] = round(float(pcr_hist["Close"].dropna().iloc[-1]), 2)
-        print(f"  PCR={result['pcr']}")
+        pcr_tickers = ["^CPC", "^CPCE", "^PCVA"]
+        for pcr_ticker in pcr_tickers:
+            try:
+                pcr_hist = yf.Ticker(pcr_ticker).history(period="5d")
+                if not pcr_hist.empty and not pcr_hist["Close"].dropna().empty:
+                    result["pcr"] = round(float(pcr_hist["Close"].dropna().iloc[-1]), 2)
+                    print(f"  PCR={result['pcr']} (via {pcr_ticker})")
+                    break
+                else:
+                    print(f"  PCR {pcr_ticker}: データなし")
+            except Exception as e:
+                print(f"  PCR {pcr_ticker}: エラー {e}")
+        if result["pcr"] is None:
+            print("  ⚠️ PCR: 全ティッカー取得失敗")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
 
