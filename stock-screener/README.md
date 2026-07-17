@@ -1,6 +1,6 @@
 # US Stock Screener
 
-kiri_trader さんのスクリーナーを参考にした個人用 US 株スクリーナーです。
+個人用のUS 株スクリーナーです。
 
 ## 構成
 
