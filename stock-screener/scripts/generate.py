@@ -1031,18 +1031,24 @@ def fetch_sentiment() -> dict:
     try:
         # PCR → yfinance経由（複数ティッカーをフォールバックで試行）
         # CBOE公式CSVはGitHub ActionsのIPからBot検出でブロックされるためyfinanceを使用
+        time.sleep(10)  # VIX取得直後のRate Limit回避
         pcr_tickers = ["^CPC", "^CPCE", "^PCVA"]
         for pcr_ticker in pcr_tickers:
-            try:
-                pcr_hist = yf.Ticker(pcr_ticker).history(period="5d")
-                if not pcr_hist.empty and not pcr_hist["Close"].dropna().empty:
-                    result["pcr"] = round(float(pcr_hist["Close"].dropna().iloc[-1]), 2)
-                    print(f"  PCR={result['pcr']} (via {pcr_ticker})")
-                    break
-                else:
-                    print(f"  PCR {pcr_ticker}: データなし")
-            except Exception as e:
-                print(f"  PCR {pcr_ticker}: エラー {e}")
+            for attempt in range(3):  # 最大3回リトライ
+                try:
+                    pcr_hist = yf.Ticker(pcr_ticker).history(period="5d")
+                    if not pcr_hist.empty and not pcr_hist["Close"].dropna().empty:
+                        result["pcr"] = round(float(pcr_hist["Close"].dropna().iloc[-1]), 2)
+                        print(f"  PCR={result['pcr']} (via {pcr_ticker})")
+                        break
+                    else:
+                        print(f"  PCR {pcr_ticker}: データなし")
+                        break
+                except Exception as e:
+                    print(f"  PCR {pcr_ticker} attempt{attempt+1}: {e}")
+                    time.sleep(15)
+            if result["pcr"] is not None:
+                break
         if result["pcr"] is None:
             print("  ⚠️ PCR: 全ティッカー取得失敗")
     except Exception as e:
