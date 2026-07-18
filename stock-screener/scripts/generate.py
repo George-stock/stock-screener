@@ -872,37 +872,43 @@ def fetch_sentiment() -> dict:
         # PCR → stooq経由でCBOE Total Put/Call Ratioを取得
         # yfinanceのCBOE PCRティッカー(^CPC等)はデータなし
         # CBOE公式CSVはBot検出でブロックされるためstooqを使用
+        # stooqのティッカー候補を順番に試す
         time.sleep(10)
         end   = datetime.date.today()
         start = end - datetime.timedelta(days=10)
-        pcr_url = (
-            f"https://stooq.com/q/d/l/?s=^cpc"
-            f"&d1={start.strftime('%Y%m%d')}"
-            f"&d2={end.strftime('%Y%m%d')}&i=d"
-        )
-        resp = requests.get(pcr_url, timeout=15,
-                            headers={"User-Agent": "Mozilla/5.0"})
-        print(f"  PCR stooq status: {resp.status_code}")
-        if resp.status_code == 200:
-            raw_lines = resp.text.strip().splitlines()
-            print(f"  PCR stooq lines: {len(raw_lines)}, last: {raw_lines[-1] if raw_lines else 'none'}")
-            # 1行目はヘッダー(Date,Open,High,Low,Close,Volume)、2行目以降がデータ
-            data_lines = [l for l in raw_lines[1:] if l.strip()]
-            if data_lines:
+        stooq_tickers = ["^cpc", "^cpce", "^cpcv", "cpc.us"]
+        for stooq_sym in stooq_tickers:
+            pcr_url = (
+                f"https://stooq.com/q/d/l/?s={stooq_sym}"
+                f"&d1={start.strftime('%Y%m%d')}"
+                f"&d2={end.strftime('%Y%m%d')}&i=d"
+            )
+            try:
+                resp = requests.get(pcr_url, timeout=15,
+                                    headers={"User-Agent": "Mozilla/5.0"})
+                print(f"  PCR stooq {stooq_sym}: HTTP{resp.status_code}")
+                if resp.status_code != 200:
+                    continue
+                raw_lines = resp.text.strip().splitlines()
+                print(f"  PCR stooq {stooq_sym} lines: {len(raw_lines)}, first: {raw_lines[0] if raw_lines else 'none'}")
+                # HTMLが返ってきた場合(ティッカー不正)はスキップ
+                if raw_lines and raw_lines[0].strip().startswith("<"):
+                    print(f"  PCR stooq {stooq_sym}: HTMLレスポンス(ティッカー不正)→スキップ")
+                    continue
+                # 1行目はヘッダー(Date,Open,High,Low,Close,Volume)
+                data_lines = [l for l in raw_lines[1:] if l.strip()]
+                if not data_lines:
+                    print(f"  PCR stooq {stooq_sym}: データ行なし→スキップ")
+                    continue
                 last = data_lines[-1].split(",")
-                # Close列は5番目(index=4)
                 if len(last) >= 5:
-                    try:
-                        result["pcr"] = round(float(last[4]), 2)
-                        print(f"  PCR={result['pcr']} (via stooq)")
-                    except ValueError as e:
-                        print(f"  ⚠️ PCR値変換失敗: {last[4]} / {e}")
-            else:
-                print("  ⚠️ PCR stooq: データ行なし")
-        else:
-            print(f"  ⚠️ PCR stooq: HTTP {resp.status_code}")
+                    result["pcr"] = round(float(last[4]), 2)
+                    print(f"  PCR={result['pcr']} (via stooq {stooq_sym})")
+                    break
+            except Exception as e:
+                print(f"  PCR stooq {stooq_sym}: エラー {e}")
         if result["pcr"] is None:
-            print("  ⚠️ PCR: 取得失敗")
+            print("  ⚠️ PCR: 全ティッカー取得失敗")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
 
