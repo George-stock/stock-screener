@@ -869,46 +869,28 @@ def fetch_sentiment() -> dict:
         print(f"  ⚠️ VIX取得エラー: {e}")
 
     try:
-        # PCR → stooq経由でCBOE Total Put/Call Ratioを取得
-        # yfinanceのCBOE PCRティッカー(^CPC等)はデータなし
-        # CBOE公式CSVはBot検出でブロックされるためstooqを使用
-        # stooqのティッカー候補を順番に試す
+        # PCR → pandas_datareader stooqバックエンド経由
+        # CBOE CSV・yfinance・requests直接はすべてBot検出でブロックされるため
         time.sleep(10)
-        end   = datetime.date.today()
-        start = end - datetime.timedelta(days=10)
-        stooq_tickers = ["^cpc", "^cpce", "^cpcv", "cpc.us"]
-        for stooq_sym in stooq_tickers:
-            pcr_url = (
-                f"https://stooq.com/q/d/l/?s={stooq_sym}"
-                f"&d1={start.strftime('%Y%m%d')}"
-                f"&d2={end.strftime('%Y%m%d')}&i=d"
-            )
-            try:
-                resp = requests.get(pcr_url, timeout=15,
-                                    headers={"User-Agent": "Mozilla/5.0"})
-                print(f"  PCR stooq {stooq_sym}: HTTP{resp.status_code}")
-                if resp.status_code != 200:
-                    continue
-                raw_lines = resp.text.strip().splitlines()
-                print(f"  PCR stooq {stooq_sym} lines: {len(raw_lines)}, first: {raw_lines[0] if raw_lines else 'none'}")
-                # HTMLが返ってきた場合(ティッカー不正)はスキップ
-                if raw_lines and raw_lines[0].strip().startswith("<"):
-                    print(f"  PCR stooq {stooq_sym}: HTMLレスポンス(ティッカー不正)→スキップ")
-                    continue
-                # 1行目はヘッダー(Date,Open,High,Low,Close,Volume)
-                data_lines = [l for l in raw_lines[1:] if l.strip()]
-                if not data_lines:
-                    print(f"  PCR stooq {stooq_sym}: データ行なし→スキップ")
-                    continue
-                last = data_lines[-1].split(",")
-                if len(last) >= 5:
-                    result["pcr"] = round(float(last[4]), 2)
-                    print(f"  PCR={result['pcr']} (via stooq {stooq_sym})")
-                    break
-            except Exception as e:
-                print(f"  PCR stooq {stooq_sym}: エラー {e}")
+        try:
+            from pandas_datareader import data as pdr
+            end   = datetime.date.today()
+            start = end - datetime.timedelta(days=10)
+            for sym in ["^CPC", "^CPCE", "^CPCV"]:
+                try:
+                    df_pcr = pdr.DataReader(sym, "stooq", start, end)
+                    if not df_pcr.empty:
+                        result["pcr"] = round(float(df_pcr["Close"].dropna().iloc[-1]), 2)
+                        print(f"  PCR={result['pcr']} (via pandas_datareader stooq {sym})")
+                        break
+                    else:
+                        print(f"  PCR pandas_datareader {sym}: データなし")
+                except Exception as e:
+                    print(f"  PCR pandas_datareader {sym}: {e}")
+        except ImportError:
+            print("  ⚠️ pandas_datareader未インストール")
         if result["pcr"] is None:
-            print("  ⚠️ PCR: 全ティッカー取得失敗")
+            print("  ⚠️ PCR: 全手段失敗")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
 
