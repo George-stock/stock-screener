@@ -869,28 +869,42 @@ def fetch_sentiment() -> dict:
         print(f"  ⚠️ VIX取得エラー: {e}")
 
     try:
-        # PCR → pandas_datareader stooqバックエンド経由
-        # CBOE CSV・yfinance・requests直接はすべてBot検出でブロックされるため
-        time.sleep(10)
-        try:
-            from pandas_datareader import data as pdr
-            end   = datetime.date.today()
-            start = end - datetime.timedelta(days=10)
-            for sym in ["^CPC", "^CPCE", "^CPCV"]:
-                try:
-                    df_pcr = pdr.DataReader(sym, "stooq", start, end)
-                    if not df_pcr.empty:
-                        result["pcr"] = round(float(df_pcr["Close"].dropna().iloc[-1]), 2)
-                        print(f"  PCR={result['pcr']} (via pandas_datareader stooq {sym})")
-                        break
-                    else:
-                        print(f"  PCR pandas_datareader {sym}: データなし")
-                except Exception as e:
-                    print(f"  PCR pandas_datareader {sym}: {e}")
-        except ImportError:
-            print("  ⚠️ pandas_datareader未インストール")
+        # PCR → CBOE Daily Market Statistics ページからスクレイピング
+        # https://www.cboe.com/markets/us/options/market-statistics/daily/
+        time.sleep(5)
+        url = "https://www.cboe.com/markets/us/options/market-statistics/daily/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        resp = requests.get(url, headers=headers, timeout=15)
+        print(f"  PCR CBOE page status: {resp.status_code}")
+        if resp.status_code == 200:
+            # "EQUITY PUT/CALL RATIO" の行を探してその値を取得
+            text = resp.text
+            import re
+            # パターン: EQUITY PUT/CALL RATIO ... 数値
+            m = re.search(r'EQUITY PUT/CALL RATIO\s*[|<>\s\w/]*?([\d]+\.[\d]+)', text, re.IGNORECASE)
+            if m:
+                result["pcr"] = round(float(m.group(1)), 2)
+                print(f"  PCR={result['pcr']} (via CBOE daily page)")
+            else:
+                # パターン2: テーブル行として探す
+                lines = text.splitlines()
+                for i, line in enumerate(lines):
+                    if "EQUITY PUT/CALL" in line.upper() and "INDEX" not in line.upper() and "EXCHANGE" not in line.upper():
+                        # 次の数行から数値を探す
+                        for j in range(i, min(i+5, len(lines))):
+                            m2 = re.search(r'([\d]+\.[\d]+)', lines[j])
+                            if m2:
+                                result["pcr"] = round(float(m2.group(1)), 2)
+                                print(f"  PCR={result['pcr']} (via CBOE daily page line match)")
+                                break
+                        if result["pcr"] is not None:
+                            break
         if result["pcr"] is None:
-            print("  ⚠️ PCR: 全手段失敗")
+            print("  ⚠️ PCR: CBOE pageから取得失敗")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
 
