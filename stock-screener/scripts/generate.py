@@ -869,42 +869,61 @@ def fetch_sentiment() -> dict:
         print(f"  ⚠️ VIX取得エラー: {e}")
 
     try:
-        # PCR → CBOE Daily Market Statistics ページからスクレイピング
-        # https://www.cboe.com/markets/us/options/market-statistics/daily/
+        # PCR → CBOE CDN APIから直接取得（複数エンドポイント試行）
+        # ページはNext.js動的レンダリングのためrequestsでは表データが取れない
+        # CDNのAPIエンドポイントを直接狙う
         time.sleep(5)
-        url = "https://www.cboe.com/markets/us/options/market-statistics/daily/"
+        import re as _re
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/csv, */*",
+            "Referer": "https://www.cboe.com/",
         }
-        resp = requests.get(url, headers=headers, timeout=15)
-        print(f"  PCR CBOE page status: {resp.status_code}")
-        if resp.status_code == 200:
-            # "EQUITY PUT/CALL RATIO" の行を探してその値を取得
-            text = resp.text
-            import re
-            # パターン: EQUITY PUT/CALL RATIO ... 数値
-            m = re.search(r'EQUITY PUT/CALL RATIO\s*[|<>\s\w/]*?([\d]+\.[\d]+)', text, re.IGNORECASE)
-            if m:
-                result["pcr"] = round(float(m.group(1)), 2)
-                print(f"  PCR={result['pcr']} (via CBOE daily page)")
-            else:
-                # パターン2: テーブル行として探す
-                lines = text.splitlines()
-                for i, line in enumerate(lines):
-                    if "EQUITY PUT/CALL" in line.upper() and "INDEX" not in line.upper() and "EXCHANGE" not in line.upper():
-                        # 次の数行から数値を探す
-                        for j in range(i, min(i+5, len(lines))):
-                            m2 = re.search(r'([\d]+\.[\d]+)', lines[j])
-                            if m2:
-                                result["pcr"] = round(float(m2.group(1)), 2)
-                                print(f"  PCR={result['pcr']} (via CBOE daily page line match)")
-                                break
-                        if result["pcr"] is not None:
+        # 試すエンドポイント一覧
+        pcr_endpoints = [
+            # CBOE CDN JSON API候補
+            ("json", "https://cdn.cboe.com/api/global/us_options/market_statistics/daily_market_statistics.json"),
+            ("json", "https://cdn.cboe.com/api/global/us_options/market_statistics/daily.json"),
+            ("json", "https://cdn.cboe.com/api/global/us_options/daily_market_statistics.json"),
+            # 過去に使えていたCSV（別ファイル）
+            ("csv",  "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCCE_History.csv"),
+            ("csv",  "https://cdn.cboe.com/api/global/us_indices/daily_prices/PCCA_History.csv"),
+        ]
+        for fmt, ep_url in pcr_endpoints:
+            try:
+                r = requests.get(ep_url, headers=headers, timeout=10)
+                print(f"  PCR {ep_url.split('/')[-1]}: HTTP{r.status_code} len={len(r.text)}")
+                if r.status_code != 200:
+                    continue
+                if fmt == "json":
+                    d = r.json()
+                    d_str = json.dumps(d)
+                    m = _re.search(r'[Ee][Qq][Uu][Ii][Tt][Yy].*?(\d+\.\d+)', d_str)
+                    if m:
+                        val = float(m.group(1))
+                        if 0.1 <= val <= 5.0:
+                            result["pcr"] = round(val, 2)
+                            print(f"  PCR={result['pcr']} (via {ep_url.split('/')[-1]})")
                             break
+                elif fmt == "csv":
+                    if r.text.strip().startswith("<"):
+                        continue  # HTMLが返ってきた
+                    lines = [l for l in r.text.strip().splitlines() if l.strip()]
+                    if len(lines) >= 2:
+                        last = lines[-1].split(",")
+                        if len(last) >= 2:
+                            try:
+                                val = float(last[1])
+                                if 0.1 <= val <= 5.0:
+                                    result["pcr"] = round(val, 2)
+                                    print(f"  PCR={result['pcr']} (via {ep_url.split('/')[-1]})")
+                                    break
+                            except ValueError:
+                                pass
+            except Exception as e:
+                print(f"  PCR endpoint error: {e}")
         if result["pcr"] is None:
-            print("  ⚠️ PCR: CBOE pageから取得失敗")
+            print("  ⚠️ PCR: 全エンドポイント取得失敗")
     except Exception as e:
         print(f"  ⚠️ PCR取得エラー: {e}")
 
