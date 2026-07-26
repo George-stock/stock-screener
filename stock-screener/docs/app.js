@@ -1,11 +1,5 @@
 "use strict";
 
-// ============================================================
-// finviz スクリーニング結果ビューア（依存なし・vanilla JS）
-// data.json を読み、日付切替・ソート・絞り込み・列選択・業種RSを表示する。
-// ============================================================
-
-// finviz の英語 Industry / Sector 名 → 自然な日本語（表示用。内部キーは英語のまま）
 const INDUSTRY_JA = {
   "Advertising Agencies": "広告代理店", "Aerospace & Defense": "航空宇宙・防衛",
   "Agricultural Inputs": "農業資材", "Airlines": "航空", "Airports & Air Services": "空港・航空サービス",
@@ -76,32 +70,29 @@ const SECTOR_JA = {
 function indJa(name) { return INDUSTRY_JA[name] || name || ""; }
 function secJa(name) { return SECTOR_JA[name] || name || ""; }
 
-// 既定で表示する列（その日のデータに存在するものだけ採用）。この並びが表示順の正準。
 const DEFAULT_COLS = [
   "Ticker", "Company", "Change", "RS Rating", "Industry RS", "EPS加速", "売上加速", "HV", "Industry", "Country",
   "Price", "Rel Volume", "Avg Volume", "Market Cap", "Float Short",
   "Perf Month", "Perf Quart", "SMA20", "SMA50", "52W Low", "Earnings",
 ];
 
-// 文字列として扱う（=数値ソート・右寄せしない）列
 const TEXT_COLS = new Set(["Ticker", "Company", "Sector", "Industry", "Country", "Earnings", "IPO Date", "HV", "EPS加速", "売上加速"]);
 
 const state = {
   data: null,
-  day: null,          // 現在表示中の day オブジェクト
-  visibleCols: [],    // 表示する列名
+  day: null,
+  visibleCols: [],
   sortCol: "RS Rating",
-  sortDir: -1,        // 1=昇順, -1=降順
+  sortDir: -1,
   filterText: "",
   rsMin: 0,
-  trend: null,            // {dates, industries} 全期間横断（init時に1度だけ構築）
-  trendSort: "latest",    // 業種RSパネルのソートキー（latest|delta|name）。ヘッダクリックで切替
-  trendSortDir: -1,       // 業種RSパネルのソート方向（1=昇順, -1=降順）
-  hvSort: "date",         // HVCパネルのソートキー（HV_COLS の key）。ヘッダクリックで切替
-  hvSortDir: -1,          // HVCパネルのソート方向（1=昇順, -1=降順）
+  trend: null,
+  trendSort: "latest",
+  trendSortDir: -1,
+  hvSort: "date",
+  hvSortDir: -1,
 };
 
-// ---- 数値パース（build_site.py の parse_num と同等） ----
 function parseNum(val) {
   if (val == null) return NaN;
   let s = String(val).replace(/[%$,]/g, "").trim().toUpperCase();
@@ -139,7 +130,6 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-// SVG用の要素生成（namespace付き）
 function svgEl(tag, attrs = {}, ...children) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -152,13 +142,10 @@ function svgEl(tag, attrs = {}, ...children) {
   return node;
 }
 
-// ============================================================
-// 初期化
-// ============================================================
 async function init() {
   let resp;
   try {
-    resp = await fetch("data.json", { cache: "no-cache" });
+    resp = await fetch("data.json", { cache: "no-store" });
     if (!resp.ok) throw new Error(resp.status);
     state.data = await resp.json();
   } catch (e) {
@@ -189,11 +176,7 @@ async function init() {
   selectDay(0);
 
   initWeeklySelect(days);
-
-  // 高出来高パネル（high_volume があれば描画、無ければ自動で隠れる）
   renderHighVolume();
-
-  // 業種RSトレンドは全期間横断なので1度だけ構築して描画する
   state.trend = buildIndustryTrend();
   renderTrend();
 }
@@ -231,15 +214,11 @@ function bindControls() {
   document.getElementById("trend-limit").addEventListener("change", renderTrend);
 }
 
-// ============================================================
-// 日付選択
-// ============================================================
 function selectDay(index) {
   const day = state.data.days[index];
   state.day = day;
   document.getElementById("screen-meta").textContent = `${day.date}・${day.count}銘柄`;
 
-  // 表示列: 既定セットのうち存在するもの。維持できるなら現在の選択を尊重
   const present = new Set(day.columns);
   const keep = state.visibleCols.filter((c) => present.has(c));
   state.visibleCols = keep.length
@@ -257,8 +236,6 @@ function selectDay(index) {
   renderTable();
 }
 
-// DEFAULT_COLS の並びを正準として列を並べ替える。
-// DEFAULT_COLS に無い列は末尾に、CSV(state.day.columns) の出現順で続ける。
 function orderCols(cols) {
   const rank = new Map(DEFAULT_COLS.map((c, i) => [c, i]));
   return cols.slice().sort((a, b) => {
@@ -269,9 +246,6 @@ function orderCols(cols) {
   });
 }
 
-// ============================================================
-// 列選択メニュー
-// ============================================================
 function buildColMenu() {
   const box = document.getElementById("col-checkboxes");
   box.innerHTML = "";
@@ -280,7 +254,6 @@ function buildColMenu() {
     cb.checked = state.visibleCols.includes(col);
     cb.addEventListener("change", () => {
       if (cb.checked) {
-        // DEFAULT_COLS の並びを保ったまま列を追加
         state.visibleCols = orderCols([...state.visibleCols, col]);
       } else {
         state.visibleCols = state.visibleCols.filter((c) => c !== col);
@@ -291,25 +264,19 @@ function buildColMenu() {
   }
 }
 
-// ============================================================
-// 示唆カード
-// ============================================================
 function renderInsights() {
   const root = document.getElementById("insights");
   root.innerHTML = "";
   const ins = state.day.insights || {};
 
-  // RS分布
   root.appendChild(el("div", { class: "card" },
     el("h3", {}, "銘柄RS 高位"),
     el("div", { class: "big" }, String(ins.rs_ge_80 ?? 0)),
     el("div", { class: "sub" }, `RS≥80（うち RS≥90: ${ins.rs_ge_90 ?? 0}）`),
   ));
 
-  // Top業種（抽出銘柄が属する業種を、業種RS順位の上位5つまで）
   const topCard = el("div", { class: "card" },
-    el("h3", { title: "抽出銘柄が属するIndustryをIndustry RS順位の上位5つまで表示。順位はその日のIndustry RS全体での順位なので、抽出銘柄が無いIndustryは飛ぶことがあります。" },
-      "🏆 Top Industry"));
+    el("h3", { title: "抽出銘柄が属するIndustryをIndustry RS順位の上位5つまで表示。" }, "🏆 Top Industry"));
   const tops = ins.top_industries || [];
   if (tops.length) {
     const ul = el("ul");
@@ -324,7 +291,6 @@ function renderInsights() {
   }
   root.appendChild(topCard);
 
-  // 集中業種
   const concCard = el("div", { class: "card" }, el("h3", {}, "🔥 集中Industry（3銘柄以上）"));
   const concList = el("ul");
   (ins.concentrated || []).forEach(([ind, c]) => {
@@ -333,10 +299,8 @@ function renderInsights() {
   concCard.appendChild((ins.concentrated && ins.concentrated.length) ? concList : el("div", { class: "sub" }, "—"));
   root.appendChild(concCard);
 
-  // センチメントカード（VIX自動取得 / PCR・AAII手動入力）
   root.appendChild(buildSentimentCard());
 
-  // 乖離銘柄
   const divCard = el("div", { class: "card" }, el("h3", {}, "💎 乖離（強い銘柄×弱いIndustry）"));
   const divList = el("ul");
   (ins.divergent || []).forEach((d) => {
@@ -348,11 +312,7 @@ function renderInsights() {
   root.appendChild(divCard);
 }
 
-// ============================================================
-// 抽出リスト・テーブル
-// ============================================================
 function rowObj(row) {
-  // 列名 → 値 のマップ。ソート/フィルタ用。
   const o = {};
   state.day.columns.forEach((c, i) => { o[c] = row[i]; });
   return o;
@@ -370,7 +330,7 @@ function filteredSortedRows() {
     const ii = cols.indexOf("Industry"), si = cols.indexOf("Sector");
     rows = rows.filter((r) =>
       idxs.some((i) => String(r[i]).toLowerCase().includes(q))
-      || (ii >= 0 && indJa(r[ii]).toLowerCase().includes(q))   // 日本語業種名でも絞り込み可
+      || (ii >= 0 && indJa(r[ii]).toLowerCase().includes(q))
       || (si >= 0 && secJa(r[si]).toLowerCase().includes(q)));
   }
   if (state.rsMin > 0 && iRS >= 0) {
@@ -389,7 +349,7 @@ function filteredSortedRows() {
         av = parseNum(av); bv = parseNum(bv);
         const aNan = isNaN(av), bNan = isNaN(bv);
         if (aNan && bNan) return 0;
-        if (aNan) return 1;      // 欠損は常に末尾
+        if (aNan) return 1;
         if (bNan) return -1;
         return (av - bv) * state.sortDir;
       }
@@ -406,7 +366,6 @@ function renderTable() {
   headRow.innerHTML = "";
   body.innerHTML = "";
 
-  // ヘッダ
   for (const col of cols) {
     const isNum = !TEXT_COLS.has(col);
     const th = el("th", { class: isNum ? "num" : "" });
@@ -439,7 +398,6 @@ function renderTable() {
   body.appendChild(frag);
 }
 
-// EPS/売上加速のセル（抽出リスト・HVパネル共通）。earnings_accel.map から ticker で引く。
 function accelCell(ticker, isEps) {
   const td = el("td", { class: "accel-cell" });
   const map = (state.data.earnings_accel && state.data.earnings_accel.map) || {};
@@ -456,7 +414,6 @@ function accelCell(ticker, isEps) {
 }
 
 function renderCell(col, raw, row) {
-  // Ticker → finviz リンク
   if (col === "Ticker") {
     const td = el("td", { class: "ticker" });
     td.appendChild(el("a", {
@@ -465,7 +422,6 @@ function renderCell(col, raw, row) {
     }, raw));
     return td;
   }
-  // RS Rating / Industry RS → グレード色付きバッジ
   if (col === "RS Rating" || col === "Industry RS") {
     const v = parseNum(raw);
     const td = el("td", { class: "num" });
@@ -473,26 +429,21 @@ function renderCell(col, raw, row) {
     td.appendChild(el("span", { class: `grade grade-${gradeFromRS(v)}` }, String(Math.round(v))));
     return td;
   }
-  // Change / from Open / Gap → 騰落色
   if (col === "Change" || col === "from Open" || col === "Gap") {
     const v = parseNum(raw);
     const td = el("td", { class: "num " + (v > 0 ? "up" : v < 0 ? "down" : "") });
     td.textContent = raw || "—";
     return td;
   }
-  // HV（高出来高フラグ）→ 色付きバッジ。該当なしは空欄。HVパネルと同じ hvBadge を使う
   if (col === "HV") {
     const td = el("td", { class: "hv-cell" });
     if (raw) td.appendChild(hvBadge(raw));
     return td;
   }
-  // EPS加速 / 売上加速 → バッジ（共通ヘルパー）。Tickerから earnings_accel.map を引く。
   if (col === "EPS加速" || col === "売上加速") {
     const ti = state.day.columns.indexOf("Ticker");
     return accelCell(row && ti >= 0 ? row[ti] : "", col === "EPS加速");
   }
-  // Company / Industry / Country → 小さめフォント・幅を狭めて省略表示（全文はホバーで表示）
-  // Industry は日本語表示にし、ホバー(title)で英語の原名を見せる。
   if (col === "Company" || col === "Industry" || col === "Country") {
     const empty = (raw === "" || raw == null);
     const disp = empty ? "—" : (col === "Industry" ? indJa(raw) : raw);
@@ -506,9 +457,6 @@ function renderCell(col, raw, row) {
   return td;
 }
 
-// ============================================================
-// リンク（finviz Maps）と TradingView コピー
-// ============================================================
 function allTickers() {
   const i = state.day.columns.indexOf("Ticker");
   return i >= 0 ? state.day.rows.map((r) => r[i]).filter(Boolean) : [];
@@ -520,7 +468,6 @@ function updateLinks() {
   maps.href = `https://finviz.com/screener.ashx?v=711&t=${tickers.join(",")}&show_etf=true`;
 }
 
-// TradingView 取込テキスト（screener.py の TV_SECTION_DEFS と同形式）
 function buildTradingViewText() {
   const cols = state.day.columns;
   const iT = cols.indexOf("Ticker");
@@ -567,15 +514,12 @@ async function copyTradingView() {
   }
 }
 
-// ============================================================
-// マイリスト → TVリスト（任意ティッカーをグレード別ブロック＋銘柄RS降順に）
-// ============================================================
-let universeCache = null;  // {date, tickers:{TICKER:[rs,irs]}} / "error" / null(未取得)
+let universeCache = null;
 
 async function ensureUniverse() {
   if (universeCache && universeCache !== "error") return universeCache;
   try {
-    const resp = await fetch("universe.json", { cache: "no-cache" });
+    const resp = await fetch("universe.json", { cache: "no-store" });
     if (!resp.ok) throw new Error(resp.status);
     universeCache = await resp.json();
   } catch (e) {
@@ -585,14 +529,13 @@ async function ensureUniverse() {
 }
 
 function parseMyTickers(text) {
-  // 改行/カンマ/スペース/セミコロン区切り。EXCHANGE: 接頭辞を除去・大文字化・重複排除（順序保持）。
   const seen = new Set();
   const out = [];
   for (let tok of String(text).split(/[\s,;]+/)) {
     tok = tok.trim().toUpperCase();
     if (!tok) continue;
     const c = tok.indexOf(":");
-    if (c >= 0) tok = tok.slice(c + 1);   // 例: NASDAQ:AAPL -> AAPL
+    if (c >= 0) tok = tok.slice(c + 1);
     if (!tok || seen.has(tok)) continue;
     seen.add(tok);
     out.push(tok);
@@ -645,13 +588,11 @@ async function runMyList() {
     });
   }
 
-  // 銘柄RS降順 → Industry RS降順 → ティッカー順
   const sortRows = (a, b) =>
     (isNaN(b.rs) ? -1 : b.rs) - (isNaN(a.rs) ? -1 : a.rs) ||
     (isNaN(b.irs) ? -1 : b.irs) - (isNaN(a.irs) ? -1 : a.irs) ||
     a.ticker.localeCompare(b.ticker);
 
-  // 銘柄RS<60（有効値）は Industry RS グレードと無関係に末尾の別ブロックへ分離
   const weak = items.filter((it) => !isNaN(it.rs) && it.rs < 60);
   const weakSet = new Set(weak);
 
@@ -698,14 +639,10 @@ async function copyMyList() {
   }
 }
 
-// ============================================================
-// 週まとめ → TVリスト
-// ============================================================
 function isoWeekKey(dateStr) {
-  // dateStr: "YYYY-MM-DD" → そのISO週の月曜日の日付文字列をキーとして返す
   const d = new Date(dateStr + "T00:00:00Z");
-  const day = d.getUTCDay() || 7; // 日曜=7扱い
-  d.setUTCDate(d.getUTCDate() - day + 1); // 月曜に戻す
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - day + 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -713,15 +650,13 @@ function initWeeklySelect(days) {
   const sel = document.getElementById("week-select");
   if (!sel || !days || !days.length) return;
 
-  // 週(月曜日キー)ごとに、その週に含まれる平日(月〜金)のdaysインデックスをまとめる
-  const weekMap = new Map(); // weekKey -> [dayIndex,...]
+  const weekMap = new Map();
   days.forEach((d, i) => {
     const wk = isoWeekKey(d.date);
     if (!weekMap.has(wk)) weekMap.set(wk, []);
     weekMap.get(wk).push(i);
   });
 
-  // 新しい週が先頭に来るようにソート
   const weekKeys = Array.from(weekMap.keys()).sort((a, b) => b.localeCompare(a));
 
   sel.innerHTML = "";
@@ -752,7 +687,6 @@ async function renderWeekly(weekKey) {
   const copyBtn = document.getElementById("weekly-copy");
   if (!sel || !output || !status) return;
 
-  // <select> の change イベントからは value(文字列)、初回呼び出しでは weekKey文字列が直接来る
   const wk = typeof weekKey === "string" && state.weekMap && state.weekMap.has(weekKey)
     ? weekKey
     : sel.value;
@@ -771,8 +705,7 @@ async function renderWeekly(weekKey) {
   const idxs = weekMap.get(wk);
   const dateList = idxs.map((i) => days[i].date).sort();
 
-  // 重複なくまとめる（同じティッカーが複数日に出た場合は1回だけ採用）
-  const seen = new Map(); // ticker -> true
+  const seen = new Map();
   for (const i of idxs) {
     const day = days[i];
     const tIdx = day.columns.indexOf("Ticker");
@@ -852,28 +785,22 @@ async function copyWeekly() {
   }
 }
 
-// ============================================================
-// 高出来高（HVE / HV1）パネル
-// ============================================================
 function hvBadge(label) {
   if (!label) return document.createTextNode("");
-  const cls = /x$/.test(label) ? "hv-broad" : `hv-${label}`; // 広義HVC(HVnx)は倍率非依存の共通色
+  const cls = /x$/.test(label) ? "hv-broad" : `hv-${label}`;
   return el("span", { class: `hv-badge ${cls}` }, label);
 }
 function hvFmt(v, nd) {
   return (v == null || isNaN(v)) ? "—" : Number(v).toFixed(nd);
 }
 
-// HVCの強さ順（種別ソート用）。広義HVnx(末尾x)は倍率非依存でHV1の次。
 const hvTier = (t) => (t === "HVE" ? 0 : t === "HV1" ? 1 : /x$/.test(t) ? 2 : 3);
-// EPS加速の並び順キー: 加速(Y)=2 > 非加速(N)=1 > データ無し=null(末尾)
 function hvAccelRank(ticker) {
   const map = (state.data && state.data.earnings_accel && state.data.earnings_accel.map) || {};
   const a = map[String(ticker || "").toUpperCase()];
   if (!a) return null;
   return a.eps_accel === "Y" ? 2 : a.eps_accel === "N" ? 1 : null;
 }
-// HVCパネルの列定義（描画順＝表示順）。get でソート値を取り出す。dir=既定方向(1=昇順,-1=降順), type=num|text
 const HV_COLS = [
   { label: "Ticker",      cls: "",    key: "ticker",   type: "text", dir: 1,  get: (r) => r.ticker || "" },
   { label: "種別",        cls: "",    key: "type",     type: "num",  dir: 1,  get: (r) => hvTier(r.type) },
@@ -894,7 +821,6 @@ function renderHighVolume() {
   if (!hv || !hv.rows || !hv.rows.length) { panel.hidden = true; return; }
   panel.hidden = false;
 
-  // メタ（対象期間・件数・更新日）
   const meta = hv.meta || {};
   const parts = [];
   if (meta.window_start && meta.window_end) parts.push(`${meta.window_start}〜${meta.window_end}`);
@@ -918,13 +844,13 @@ function renderHighVolume() {
     if (spec.type === "num") {
       const an = av == null || isNaN(av), bn = bv == null || isNaN(bv);
       if (an && bn) r = 0;
-      else if (an) return 1;   // 欠損は常に末尾
+      else if (an) return 1;
       else if (bn) return -1;
       else r = (av - bv) * dir;
     } else {
       r = String(av).localeCompare(String(bv)) * dir;
     }
-    return r || (spec.key === "date" ? 0 : byDateDesc(a, b)); // 同値は最新HV日でタイブレーク
+    return r || (spec.key === "date" ? 0 : byDateDesc(a, b));
   });
 
   const head = document.getElementById("hv-head");
@@ -970,12 +896,6 @@ function renderHighVolume() {
   document.getElementById("hv-empty").hidden = rows.length > 0;
 }
 
-// ============================================================
-// 業種RSトレンド（ヒートマップ + 推移）
-// ============================================================
-
-// 全日の industry_rs を「業種 × 日付」の時系列に組み替える。
-// industry_trend（SC無しの日も含む全業種RS）を優先し、無ければ days からフォールバック。
 function buildIndustryTrend() {
   const src = (state.data.industry_trend && state.data.industry_trend.length)
     ? state.data.industry_trend
@@ -983,10 +903,10 @@ function buildIndustryTrend() {
   const days = src
     .filter((d) => d.industry_rs && d.industry_rs.length)
     .slice()
-    .sort((a, b) => (a.date < b.date ? -1 : 1)); // 古い→新しい
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
 
   const dates = days.map((d) => d.date);
-  const map = new Map(); // industry -> {industry, sector, byDate:{date:{rs,rank}}}
+  const map = new Map();
   for (const d of days) {
     for (const r of d.industry_rs) {
       if (!r.industry) continue;
@@ -999,11 +919,9 @@ function buildIndustryTrend() {
   return { dates, industries: Array.from(map.values()) };
 }
 
-// 日付列を粒度(日次/週次)に応じて束ねる。週次は月曜起点でグルーピングし、
-// 各週はその週内で最も新しい営業日のスナップショットを代表値にする（IBD流の週末値）。
 function mondayKey(dateStr) {
   const dt = new Date(dateStr + "T00:00:00Z");
-  const day = dt.getUTCDay();                       // 0=日 .. 6=土
+  const day = dt.getUTCDay();
   dt.setUTCDate(dt.getUTCDate() - (day === 0 ? 6 : day - 1));
   return dt.toISOString().slice(0, 10);
 }
@@ -1025,7 +943,6 @@ function buildColumns(dates, gran) {
   }
   return dates.map((d) => ({ label: mmdd(d), title: d, days: [d] }));
 }
-// その業種の、列(日 or 週)における代表セル。週次は週内の最新営業日を採る。
 function cellAt(ind, col) {
   for (let i = col.days.length - 1; i >= 0; i--) {
     const c = ind.byDate[col.days[i]];
@@ -1037,8 +954,6 @@ function lastCell(ind, cols) {
   for (let i = cols.length - 1; i >= 0; i--) { const v = cellAt(ind, cols[i]); if (v) return v; }
   return null;
 }
-// 直近 TREND_LOOKBACK 期の順位を線形回帰した傾き。単一期間比のノイズを抑える。
-// 値は1期あたりの順位改善数で、+ = 順位が上昇傾向（rank が減少）になるよう符号を反転。
 const TREND_LOOKBACK = 4;
 function rankSlope(ind, cols) {
   const recent = cols.slice(-TREND_LOOKBACK);
@@ -1057,16 +972,14 @@ function rankSlope(ind, cols) {
   return -(num / den);
 }
 
-// RS(1-99) → 緑(高)〜赤(低) の背景色
 function rsColor(rs) {
   if (rs == null || isNaN(rs)) return null;
-  const hue = Math.max(0, Math.min(120, (rs / 99) * 120)); // 0=赤, 120=緑
+  const hue = Math.max(0, Math.min(120, (rs / 99) * 120));
   return `hsl(${hue}, 55%, 32%)`;
 }
 
 function mmdd(date) { return date.slice(5).replace("-", "/"); }
 
-// 各ソートキーの既定方向（別キーへ切替時/ドロップダウン変更時に適用）。1=昇順, -1=降順。
 const TREND_SORT_DEFAULT_DIR = { latest: -1, delta: -1, name: 1 };
 
 function renderTrend() {
@@ -1077,11 +990,11 @@ function renderTrend() {
   const empty = document.getElementById("trend-empty");
   head.innerHTML = ""; body.innerHTML = ""; movers.innerHTML = "";
 
-  const mode = document.getElementById("trend-mode").value;   // rs | rank
-  const sortBy = state.trendSort;                             // latest | delta | name
+  const mode = document.getElementById("trend-mode").value;
+  const sortBy = state.trendSort;
   const limit = Number(document.getElementById("trend-limit").value) || 0;
   const q = document.getElementById("trend-filter").value.trim().toLowerCase();
-  const gran = document.getElementById("trend-gran").value;   // day | week
+  const gran = document.getElementById("trend-gran").value;
 
   const cols = buildColumns(dates, gran);
 
@@ -1096,7 +1009,6 @@ function renderTrend() {
   empty.hidden = true;
   document.querySelector("#heatmap").hidden = false;
 
-  // 絞り込み
   let list = industries;
   if (q) {
     list = list.filter((it) =>
@@ -1104,7 +1016,6 @@ function renderTrend() {
       || indJa(it.industry).toLowerCase().includes(q) || secJa(it.sector).toLowerCase().includes(q));
   }
 
-  // 並び替え
   const latestRS = (it) => { const l = lastCell(it, cols); return l && l.rs != null ? l.rs : -1; };
   const dir = state.trendSortDir;
   if (sortBy === "name") {
@@ -1114,7 +1025,7 @@ function renderTrend() {
       const av = rankSlope(a, cols), bv = rankSlope(b, cols);
       const an = av == null, bn = bv == null;
       if (an && bn) return 0;
-      if (an) return 1;   // 傾き欠損は常に末尾
+      if (an) return 1;
       if (bn) return -1;
       return (av - bv) * dir;
     });
@@ -1123,10 +1034,8 @@ function renderTrend() {
   }
   if (limit > 0) list = list.slice(0, limit);
 
-  // 上昇/下降 movers（全業種から、絞り込み前の母集団で算出）
   renderMovers(movers, industries, cols);
 
-  // クリックでソートする業種RSヘッダ。現在のソートキーなら方向トグル、違えば既定方向で切替。
   const sortTh = (label, key, cls, title) => {
     const th = el("th", { class: cls + " trend-sortable", title }, label);
     if (sortBy === key) th.appendChild(el("span", { class: "arrow" }, state.trendSortDir === 1 ? " ▲" : " ▼"));
@@ -1138,13 +1047,12 @@ function renderTrend() {
     return th;
   };
 
-  // ヘッダ: 業種 | 最新RS | 推移 | 各列(日 or 週末) | 傾き
   const htr = el("tr");
   htr.appendChild(sortTh("Industry", "name", "ind-h", "Industry名順（クリックで昇順/降順）"));
   htr.appendChild(sortTh("最新RS", "latest", "latest-rs-h", "最新のIndustry RS（クリックで昇順/降順）"));
   htr.appendChild(el("th", { class: "spark-h", title: "Industry RSの推移（左=古い, 右=新しい / 上=高い）" }, "推移"));
   for (const c of cols) htr.appendChild(el("th", { title: c.title }, c.label));
-  htr.appendChild(sortTh("傾き", "delta", "delta-h", "直近数期の順位の傾き（+=上昇傾向 / 1期あたりの改善数）。クリックで昇順/降順"));
+  htr.appendChild(sortTh("傾き", "delta", "delta-h", "直近数期の順位の傾き（+=上昇傾向）。クリックで昇順/降順"));
   head.appendChild(htr);
 
   const frag = document.createDocumentFragment();
@@ -1164,11 +1072,9 @@ function renderTrend() {
     th.appendChild(sub);
     tr.appendChild(th);
 
-    // 最新RS（スパークラインの左）
     tr.appendChild(el("td", { class: "latest-rs" },
       latest && latest.rs != null ? String(latest.rs) : "—"));
 
-    // 業種名とヒートマップの間に推移スパークライン
     tr.appendChild(el("td", { class: "spark" }, sparklineSVG(it, cols, mode)));
 
     for (const c of cols) {
@@ -1222,8 +1128,6 @@ function renderMovers(root, industries, cols) {
   root.appendChild(group(`🔽 下降 (${span})`, down, "delta-down", "▼"));
 }
 
-// 各業種行のインライン・スパークライン（業種RS値のミニ折れ線）。
-// 行ごとに自身のRSレンジでオートスケールし、上=高RSとなるよう描く。
 function sparklineSVG(ind, cols, mode) {
   const useRank = mode === "rank";
   const W = 110, H = 26, pad = 3;
@@ -1241,7 +1145,6 @@ function sparklineSVG(ind, cols, mode) {
   if (vmin === vmax) { vmin -= 1; vmax += 1; }
   const n = cols.length;
   const xAt = (i) => pad + (n <= 1 ? (W - 2 * pad) / 2 : (i * (W - 2 * pad)) / (n - 1));
-  // 上=良い方: RSは高い値、順位は小さい値が上になるよう向きを反転
   const yAt = useRank
     ? (v) => pad + ((v - vmin) / (vmax - vmin)) * (H - 2 * pad)
     : (v) => pad + ((vmax - v) / (vmax - vmin)) * (H - 2 * pad);
@@ -1296,6 +1199,10 @@ function pcrLabel(p)  { if(p==null)return"—"; if(p>=1.0)return"弱気"; if(p>=
 function aaiiLabel(a) { if(a==null)return"—"; if(a>=45)return"強弱気"; if(a>=35)return"弱気"; return"平均"; }
 function vtsLabel(r)  { if(r==null)return"—"; if(r>=1.1)return"警戒"; if(r>=1.0)return"やや高"; return"通常"; }
 
+const INPUT_STYLE = "width:72px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 6px;font-size:11px;";
+const LABEL_STYLE = "font-size:10px;color:var(--text-dim);white-space:nowrap;";
+const LINK_STYLE  = "font-size:10px;color:var(--accent);white-space:nowrap;";
+
 function buildSentimentCard() {
   const card = el("div", { class: "card", id: "sent-card", style: "min-width:240px" });
   card.appendChild(el("h3", {}, "📊 NQ1! センチメント ",
@@ -1306,27 +1213,63 @@ function buildSentimentCard() {
     }, "結果DB↗")
   ));
 
-  // data.jsonからセンチメント取得（generate.pyで毎日更新）
-  const sent = state.data.sentiment || {};
-  const vix  = sent.vix  ?? null;
-  const vts  = sent.vts  ?? null;
-  const pcr  = sent.pcr  ?? null;
+  const sent    = state.data.sentiment || {};
+  const vix     = sent.vix  ?? null;
+  const vts     = sent.vts  ?? null;
+  const autoPcr = sent.pcr  ?? null;   // generate.py による自動取得値
 
-  // AAII手動入力部分
-  const manual = sentLoad();
-  const inputRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;" });
+  const manual  = sentLoad();
 
+  // 有効PCR: 自動取得成功なら自動値、失敗なら手動保存値
+  const initPcr  = autoPcr !== null ? autoPcr : (manual.pcr  ?? null);
+  const initAaii = manual.aaii ?? null;
+
+  // ---- PCR 入力行 ----
+  const pcrInput = document.createElement("input");
+  Object.assign(pcrInput, {
+    type: "number", step: "0.01", min: "0", max: "10",
+    placeholder: "PCR手動",
+    value: initPcr !== null ? String(initPcr) : "",
+  });
+  pcrInput.style.cssText = INPUT_STYLE;
+  // 自動取得成功時はグレーアウトして「自動取得済み」を示す
+  if (autoPcr !== null) {
+    pcrInput.style.opacity = "0.55";
+    pcrInput.title = `generate.py が自動取得済み（${autoPcr}）。手動で上書きも可。`;
+  }
+
+  const pcrAutoLabel = autoPcr !== null
+    ? el("span", { style: "font-size:10px;color:var(--accent);" }, "✓自動")
+    : el("span", { style: "font-size:10px;color:#f59e0b;" }, "要手動");
+
+  const pcrLink = el("a", {
+    href: "https://www.cboe.com/markets/us/options/market-statistics/daily/",
+    target: "_blank",
+    style: LINK_STYLE,
+    title: "CBOE Daily Market Statistics（Equity Put/Call Ratio を確認）"
+  }, "CBOE↗");
+
+  const pcrRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap;" });
+  pcrRow.append(
+    el("span", { style: LABEL_STYLE }, "PCR:"),
+    pcrInput,
+    pcrAutoLabel,
+    pcrLink
+  );
+
+  // ---- AAII 入力行 ----
   const aaiiInput = document.createElement("input");
   Object.assign(aaiiInput, {
-    type:"number", step:"0.1", min:"0", max:"100",
-    placeholder:"AAII弱気%", value: manual.aaii ?? "",
+    type: "number", step: "0.1", min: "0", max: "100",
+    placeholder: "AAII弱気%",
+    value: initAaii !== null ? String(initAaii) : "",
   });
-  aaiiInput.style.cssText = "width:80px;background:var(--panel-2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 6px;font-size:11px;";
+  aaiiInput.style.cssText = INPUT_STYLE;
 
   const aaiiLink = el("a", {
     href: "https://www.aaii.com/sentimentsurvey",
     target: "_blank",
-    style: "font-size:10px;color:var(--accent);white-space:nowrap;"
+    style: LINK_STYLE,
   }, "AAII↗");
 
   const saveBtn = document.createElement("button");
@@ -1336,23 +1279,34 @@ function buildSentimentCard() {
   const scoresDiv = el("div", { id: "sent-scores" });
 
   saveBtn.addEventListener("click", () => {
-    const aaii = parseFloat(aaiiInput.value) || null;
-    sentSave({ aaii });
-    renderSentScores(scoresDiv, vix, vts, pcr, aaii);
+    const aaii    = parseFloat(aaiiInput.value);
+    const pcrManual = parseFloat(pcrInput.value);
+    const saveAaii = isNaN(aaii)    ? null : aaii;
+    const savePcr  = isNaN(pcrManual) ? null : pcrManual;
+    sentSave({ aaii: saveAaii, pcr: savePcr });
+
+    // 表示に使うPCR: 手動入力値 > 自動値 の順（保存した手動値を優先）
+    const usePcr = savePcr !== null ? savePcr : autoPcr;
+    renderSentScores(scoresDiv, vix, vts, usePcr, saveAaii);
+
+    saveBtn.textContent = "保存済 ✓";
+    setTimeout(() => { saveBtn.textContent = "保存"; }, 1500);
   });
 
-  inputRow.append(
-    el("span", { style:"font-size:10px;color:var(--text-dim);" }, "AAII弱気%:"),
+  const aaiiRow = el("div", { style: "display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;" });
+  aaiiRow.append(
+    el("span", { style: LABEL_STYLE }, "AAII弱気%:"),
     aaiiInput,
     aaiiLink,
     saveBtn
   );
 
-  card.appendChild(inputRow);
+  card.appendChild(pcrRow);
+  card.appendChild(aaiiRow);
   card.appendChild(scoresDiv);
 
-  // 初期描画
-  renderSentScores(scoresDiv, vix, vts, pcr, manual.aaii ?? null);
+  // 初期描画（有効PCRを使用）
+  renderSentScores(scoresDiv, vix, vts, initPcr, initAaii);
 
   return card;
 }
@@ -1381,12 +1335,10 @@ function renderSentScores(target, vix, vts, pcr, aaii) {
   }
   target.appendChild(grid);
 
-  // スコアバー
   const barWrap = el("div", { style:"background:var(--panel-2);border-radius:3px;height:6px;margin-bottom:5px;overflow:hidden;" });
   barWrap.appendChild(el("div", { style:`height:100%;width:${Math.min(100,score/maxScore*100).toFixed(1)}%;background:${sig.color};border-radius:3px;` }));
   target.appendChild(barWrap);
 
-  // メッセージ
   let msg = score < 4.5 ? "→ VIX25+ / PCR0.85+ / AAII35%+ を待つ"
           : score < 6.5 ? "→ 小さく打診、追加は慎重に"
           : score < 8.5 ? "→ 分割買い開始"
